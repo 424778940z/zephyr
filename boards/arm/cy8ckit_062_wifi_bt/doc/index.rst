@@ -23,8 +23,7 @@ The PSoC 6 WiFi-BT Pioneer board offers compatibility with Arduino shields.
 The Cortex-M0+ is a primary core on the board's SoC. It starts first and
 enables the CM4 core.
 
-.. image:: img/cy8ckit_062_wifi_bt_m0.png
-     :width: 887px
+.. image:: img/cy8ckit_062_wifi_bt_m0.jpg
      :align: center
      :alt: CY8CKIT_062_WIFI_BT
 
@@ -84,16 +83,19 @@ Supported Features
 
 The board configuration supports the following hardware features:
 
-+-----------+------------+----------------------+
-| Interface | Controller | Driver/Component     |
-+===========+============+======================+
-| NVIC      | on-chip    | nested vectored      |
-|           |            | interrupt controller |
-+-----------+------------+----------------------+
-| SYSTICK   | on-chip    | system clock         |
-+-----------+------------+----------------------+
-| UART      | on-chip    | serial port          |
-+-----------+------------+----------------------+
++-----------+------------+-----------------------+
+| Interface | Controller | Driver/Component      |
++===========+============+=======================+
+| NVIC      | on-chip    | nested vectored       |
+|           |            | interrupt controller  |
++-----------+------------+-----------------------+
+| SYSTICK   | on-chip    | system clock          |
++-----------+------------+-----------------------+
+| PINCTRL   | on-chip    | pin control           |
++-----------+------------+-----------------------+
+| UART      | on-chip    | serial port-polling;  |
+|           |            | serial port-interrupt |
++-----------+------------+-----------------------+
 
 
 The default configuration can be found in the Kconfig

@@ -25,7 +25,7 @@ SECTION_DATA_PROLOGUE(_GCOV_BSS_SECTION_NAME,(NOLOAD),)
 #endif /* CONFIG_USERSPACE */
 
 	__gcov_bss_end = .;
-} GROUP_LINK_IN(RAMABLE_REGION)
+} GROUP_NOLOAD_LINK_IN(RAMABLE_REGION, ROMABLE_REGION)
 
 __gcov_bss_num_words = ((__gcov_bss_end - __gcov_bss_start) >> 2);
 __gcov_bss_size = __gcov_bss_end - __gcov_bss_start;
@@ -54,7 +54,7 @@ SECTION_PROLOGUE(_GCOV_BSS_SECTION_NAME, (NOLOAD),)
 	. = ALIGN(4);
 	MMU_PAGE_ALIGN
 	__gcov_bss_end = .;
-}GROUP_DATA_LINK_IN(RAMABLE_REGION, RAMABLE_REGION)
+} GROUP_NOLOAD_LINK_IN(RAMABLE_REGION, ROMABLE_REGION)
 
 __gcov_bss_num_words = ((__gcov_bss_end - __gcov_bss_start) >> 2);
 __gcov_bss_size = __gcov_bss_end - __gcov_bss_start;
@@ -64,12 +64,15 @@ __gcov_bss_size = __gcov_bss_end - __gcov_bss_start;
 SECTION_PROLOGUE(_GCOV_BSS_SECTION_NAME, (NOLOAD),)
 {
 	MPU_MIN_SIZE_ALIGN
-	. = ALIGN(4);
 	__gcov_bss_start = .;
 	*(".bss.__gcov0.*");
+#ifdef CONFIG_USERSPACE
+	. = ALIGN(1 << LOG2CEIL(. - __gcov_bss_start));
+#else
 	MPU_MIN_SIZE_ALIGN
+#endif
 	__gcov_bss_end = .;
-}GROUP_DATA_LINK_IN(RAMABLE_REGION, RAMABLE_REGION)
+} GROUP_NOLOAD_LINK_IN(RAMABLE_REGION, ROMABLE_REGION)
 
 __gcov_bss_num_words = ((__gcov_bss_end - __gcov_bss_start) >> 2);
 __gcov_bss_size = __gcov_bss_end - __gcov_bss_start;

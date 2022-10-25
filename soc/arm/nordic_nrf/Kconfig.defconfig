@@ -22,13 +22,14 @@ config SYS_CLOCK_HW_CYCLES_PER_SEC
 	default 32768
 
 config SYS_CLOCK_TICKS_PER_SEC
+	default 128 if !TICKLESS_KERNEL
 	default 32768
 
 config ARCH_HAS_CUSTOM_BUSY_WAIT
 	default y
 
 config PM
-	default y if SYS_CLOCK_EXISTS
+	default y if SYS_CLOCK_EXISTS && !HAS_NO_PM && MULTITHREADING
 
 config BUILD_OUTPUT_HEX
 	default y

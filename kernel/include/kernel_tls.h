@@ -14,7 +14,7 @@
 #ifndef ZEPHYR_KERNEL_INCLUDE_KERNEL_TLS_H_
 #define ZEPHYR_KERNEL_INCLUDE_KERNEL_TLS_H_
 
-#include <linker/linker-defs.h>
+#include <zephyr/linker/linker-defs.h>
 
 /**
  * @brief Return the total size of TLS data/bss areas
@@ -28,7 +28,10 @@
  */
 static inline size_t z_tls_data_size(void)
 {
-	return (size_t)__tls_size;
+	size_t tdata_size = ROUND_UP(__tdata_size, __tdata_align);
+	size_t tbss_size = ROUND_UP(__tbss_size, __tbss_align);
+
+	return tdata_size + tbss_size;
 }
 
 /**
@@ -48,7 +51,7 @@ static inline void z_tls_copy(char *dest)
 	memcpy(dest, __tdata_start, tdata_size);
 
 	/* Clear BSS data (tbss) */
-	dest += tdata_size;
+	dest += ROUND_UP(tdata_size, __tdata_align);
 	memset(dest, 0, tbss_size);
 }
 

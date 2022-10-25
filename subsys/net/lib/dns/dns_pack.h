@@ -7,8 +7,8 @@
 #ifndef _DNS_PACK_H_
 #define _DNS_PACK_H_
 
-#include <net/net_ip.h>
-#include <net/buf.h>
+#include <zephyr/net/net_ip.h>
+#include <zephyr/net/buf.h>
 
 #include <zephyr/types.h>
 #include <stddef.h>
@@ -340,10 +340,12 @@ int dns_msg_pack_qname(uint16_t *len, uint8_t *buf, uint16_t size,
  * @param dname_ptr An index to the previous CNAME. For example for the
  *        first answer, ptr must be 0x0c, the DNAME at the question.
  * @param ttl TTL answer parameter.
+ * @param type Answer type parameter.
  * @retval 0 on success
  * @retval -ENOMEM on error
  */
-int dns_unpack_answer(struct dns_msg_t *dns_msg, int dname_ptr, uint32_t *ttl);
+int dns_unpack_answer(struct dns_msg_t *dns_msg, int dname_ptr, uint32_t *ttl,
+		      enum dns_rr_type *type);
 
 /**
  * @brief Unpacks the header's response.

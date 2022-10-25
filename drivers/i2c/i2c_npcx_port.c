@@ -12,7 +12,7 @@
  *
  * This file contains the driver of SMBus/I2C buses (ports) which provides
  * pin-muxing for each i2c io-pads. In order to support "SMBus Multi-Bus"
- * feature, please refer the diagram below, the driver alsp provides connection
+ * feature, please refer the diagram below, the driver also provides connection
  * between Zephyr i2c api functions and i2c controller driver which provides
  * full support for SMBus/I2C transactions.
  *
@@ -29,12 +29,13 @@
  */
 
 #include <assert.h>
-#include <drivers/clock_control.h>
-#include <drivers/i2c.h>
-#include <dt-bindings/i2c/i2c.h>
+#include <zephyr/drivers/clock_control.h>
+#include <zephyr/drivers/i2c.h>
+#include <zephyr/drivers/pinctrl.h>
+#include <zephyr/dt-bindings/i2c/i2c.h>
 #include <soc.h>
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(i2c_npcx_port, LOG_LEVEL_ERR);
 
 #include "i2c_npcx_controller.h"
@@ -42,39 +43,26 @@ LOG_MODULE_REGISTER(i2c_npcx_port, LOG_LEVEL_ERR);
 
 /* Device config */
 struct i2c_npcx_port_config {
-	/* pinmux configuration */
-	const uint8_t   alts_size;
-	const struct npcx_alt *alts_list;
 	uint32_t bitrate;
 	uint8_t port;
-};
-
-/* Driver data */
-struct i2c_npcx_port_data {
 	const struct device *i2c_ctrl;
+	/* pinmux configuration */
+	const struct pinctrl_dev_config *pcfg;
 };
-
-/* Driver convenience defines */
-#define DRV_CONFIG(dev) \
-	((const struct i2c_npcx_port_config *)(dev)->config)
-
-#define DRV_DATA(dev) \
-	((struct i2c_npcx_port_data *)(dev)->data)
 
 /* I2C api functions */
 static int i2c_npcx_port_configure(const struct device *dev,
 							uint32_t dev_config)
 {
-	const struct i2c_npcx_port_config *const config = DRV_CONFIG(dev);
-	struct i2c_npcx_port_data *const data = DRV_DATA(dev);
+	const struct i2c_npcx_port_config *const config = dev->config;
 
-	if (data->i2c_ctrl == NULL) {
+	if (config->i2c_ctrl == NULL) {
 		LOG_ERR("Cannot find i2c controller on port%02x!",
 								config->port);
 		return -EIO;
 	}
 
-	if (!(dev_config & I2C_MODE_MASTER)) {
+	if (!(dev_config & I2C_MODE_CONTROLLER)) {
 		return -ENOTSUP;
 	}
 
@@ -83,36 +71,74 @@ static int i2c_npcx_port_configure(const struct device *dev,
 	}
 
 	/* Configure i2c controller */
-	return npcx_i2c_ctrl_configure(data->i2c_ctrl, dev_config);
+	return npcx_i2c_ctrl_configure(config->i2c_ctrl, dev_config);
+}
+
+static int i2c_npcx_port_get_config(const struct device *dev, uint32_t *dev_config)
+{
+	const struct i2c_npcx_port_config *const config = dev->config;
+	uint32_t speed;
+	int ret;
+
+	if (config->i2c_ctrl == NULL) {
+		LOG_ERR("Cannot find i2c controller on port%02x!", config->port);
+		return -EIO;
+	}
+
+	ret = npcx_i2c_ctrl_get_speed(config->i2c_ctrl, &speed);
+	if (!ret) {
+		*dev_config = (I2C_MODE_CONTROLLER | speed);
+	}
+
+	return ret;
 }
 
 static int i2c_npcx_port_transfer(const struct device *dev,
 		struct i2c_msg *msgs, uint8_t num_msgs, uint16_t addr)
 {
-	const struct i2c_npcx_port_config *const config = DRV_CONFIG(dev);
-	struct i2c_npcx_port_data *const data = DRV_DATA(dev);
+	const struct i2c_npcx_port_config *const config = dev->config;
 	int ret = 0;
 	int idx_ctrl = (config->port & 0xF0) >> 4;
 	int idx_port = (config->port & 0x0F);
 
-	if (data->i2c_ctrl == NULL) {
+	if (config->i2c_ctrl == NULL) {
 		LOG_ERR("Cannot find i2c controller on port%02x!",
 								config->port);
 		return -EIO;
 	}
 
 	/* Lock mutex of i2c/smb controller */
-	npcx_i2c_ctrl_mutex_lock(data->i2c_ctrl);
+	npcx_i2c_ctrl_mutex_lock(config->i2c_ctrl);
 
 	/* Switch correct port for i2c controller first */
 	npcx_pinctrl_i2c_port_sel(idx_ctrl, idx_port);
 
 	/* Start transaction with i2c controller */
-	ret = npcx_i2c_ctrl_transfer(data->i2c_ctrl, msgs, num_msgs, addr,
+	ret = npcx_i2c_ctrl_transfer(config->i2c_ctrl, msgs, num_msgs, addr,
 								config->port);
 
 	/* Unlock mutex of i2c/smb controller */
-	npcx_i2c_ctrl_mutex_unlock(data->i2c_ctrl);
+	npcx_i2c_ctrl_mutex_unlock(config->i2c_ctrl);
+
+	return ret;
+}
+static int i2c_npcx_port_recover_bus(const struct device *dev)
+{
+	const struct i2c_npcx_port_config *const config = dev->config;
+	int ret;
+
+	if (config->i2c_ctrl == NULL) {
+		LOG_ERR("Cannot find i2c controller on port%02x!", config->port);
+		return -EIO;
+	}
+
+	/* Lock mutex of i2c/smb controller */
+	npcx_i2c_ctrl_mutex_lock(config->i2c_ctrl);
+
+	ret = npcx_i2c_ctrl_recover_bus(config->i2c_ctrl);
+
+	/* Unlock mutex of i2c/smb controller */
+	npcx_i2c_ctrl_mutex_unlock(config->i2c_ctrl);
 
 	return ret;
 }
@@ -120,15 +146,20 @@ static int i2c_npcx_port_transfer(const struct device *dev,
 /* I2C driver registration */
 static int i2c_npcx_port_init(const struct device *dev)
 {
-	const struct i2c_npcx_port_config *const config = DRV_CONFIG(dev);
+	const struct i2c_npcx_port_config *const config = dev->config;
 	uint32_t i2c_config;
 	int ret;
 
 	/* Configure pin-mux for I2C device */
-	npcx_pinctrl_mux_configure(config->alts_list, config->alts_size, 1);
+	ret = pinctrl_apply_state(config->pcfg, PINCTRL_STATE_DEFAULT);
+	if (ret < 0) {
+		LOG_ERR("I2C pinctrl setup failed (%d)", ret);
+		return ret;
+	}
+
 
 	/* Setup initial i2c configuration */
-	i2c_config = (I2C_MODE_MASTER | i2c_map_dt_bitrate(config->bitrate));
+	i2c_config = (I2C_MODE_CONTROLLER | i2c_map_dt_bitrate(config->bitrate));
 	ret = i2c_npcx_port_configure(dev, i2c_config);
 	if (ret != 0) {
 		return ret;
@@ -139,47 +170,27 @@ static int i2c_npcx_port_init(const struct device *dev)
 
 static const struct i2c_driver_api i2c_port_npcx_driver_api = {
 	.configure = i2c_npcx_port_configure,
+	.get_config = i2c_npcx_port_get_config,
 	.transfer = i2c_npcx_port_transfer,
+	.recover_bus = i2c_npcx_port_recover_bus,
 };
 
 /* I2C port init macro functions */
-#define NPCX_I2C_PORT_INIT_FUNC(inst) _CONCAT(i2c_npcx_port_init_, inst)
-#define NPCX_I2C_PORT_INIT_FUNC_DECL(inst) \
-	static int i2c_npcx_port_init_##inst(const struct device *dev)
-
-#define NPCX_I2C_PORT_INIT_FUNC_IMPL(inst)                                     \
-	static int i2c_npcx_port_init_##inst(const struct device *dev)         \
-	{	                                                               \
-		struct i2c_npcx_port_data *const data = DRV_DATA(dev);         \
-									       \
-		data->i2c_ctrl = device_get_binding(                           \
-				DT_LABEL(DT_INST_PHANDLE(inst, controller)));  \
-		return i2c_npcx_port_init(dev);                                \
-	}
-
 #define NPCX_I2C_PORT_INIT(inst)                                               \
-	NPCX_I2C_PORT_INIT_FUNC_DECL(inst);                                    \
-									       \
-	static const struct npcx_alt i2c_port_alts##inst[] =                   \
-					NPCX_DT_ALT_ITEMS_LIST(inst);          \
+	PINCTRL_DT_INST_DEFINE(inst);					       \
 									       \
 	static const struct i2c_npcx_port_config i2c_npcx_port_cfg_##inst = {  \
 		.port = DT_INST_PROP(inst, port),                              \
 		.bitrate = DT_INST_PROP(inst, clock_frequency),                \
-		.alts_size = ARRAY_SIZE(i2c_port_alts##inst),                  \
-		.alts_list = i2c_port_alts##inst,                              \
+		.i2c_ctrl = DEVICE_DT_GET(DT_INST_PHANDLE(inst, controller)),  \
+		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(inst),                  \
 	};                                                                     \
 									       \
-	static struct i2c_npcx_port_data i2c_npcx_port_data_##inst;            \
-									       \
-	DEVICE_DT_INST_DEFINE(inst,                                            \
-			    NPCX_I2C_PORT_INIT_FUNC(inst),                     \
-			    device_pm_control_nop,                             \
-			    &i2c_npcx_port_data_##inst,                        \
+	I2C_DEVICE_DT_INST_DEFINE(inst,                                        \
+			    i2c_npcx_port_init,                                \
+			    NULL, NULL,                                        \
 			    &i2c_npcx_port_cfg_##inst,                         \
-			    PRE_KERNEL_1, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,  \
-			    &i2c_port_npcx_driver_api);                        \
-									       \
-	NPCX_I2C_PORT_INIT_FUNC_IMPL(inst)
+			    PRE_KERNEL_1, CONFIG_I2C_INIT_PRIORITY,            \
+			    &i2c_port_npcx_driver_api);
 
 DT_INST_FOREACH_STATUS_OKAY(NPCX_I2C_PORT_INIT)

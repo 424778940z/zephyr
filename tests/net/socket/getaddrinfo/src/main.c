@@ -4,15 +4,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(net_test, CONFIG_NET_SOCKETS_LOG_LEVEL);
 
 #include <stdio.h>
-#include <ztest_assert.h>
-#include <sys/mutex.h>
-#include <net/socket.h>
-#include <net/dns_resolve.h>
-#include <net/buf.h>
+#include <zephyr/ztest_assert.h>
+#include <zephyr/sys/sem.h>
+#include <zephyr/net/socket.h>
+#include <zephyr/net/dns_resolve.h>
+#include <zephyr/net/buf.h>
 
 #include "../../socket_helpers.h"
 
@@ -22,8 +22,8 @@ LOG_MODULE_REGISTER(net_test, CONFIG_NET_SOCKETS_LOG_LEVEL);
 
 #define ANY_PORT 0
 #define MAX_BUF_SIZE 128
-#define STACK_SIZE (1024 + CONFIG_TEST_EXTRA_STACKSIZE)
-#define THREAD_PRIORITY K_PRIO_COOP(8)
+#define STACK_SIZE (1024 + CONFIG_TEST_EXTRA_STACK_SIZE)
+#define THREAD_PRIORITY K_PRIO_COOP(2)
 #define WAIT_TIME K_MSEC(250)
 
 static uint8_t recv_buf[MAX_BUF_SIZE];
@@ -36,8 +36,8 @@ static struct sockaddr_in6 addr_v6;
 
 static int queries_received;
 
-/* The mutex is there to wait the data to be received. */
-static ZTEST_BMEM SYS_MUTEX_DEFINE(wait_data);
+/* The semaphore is there to wait the data to be received. */
+static ZTEST_BMEM struct sys_sem wait_data;
 
 NET_BUF_POOL_DEFINE(test_dns_msg_pool, 1, 512, 0, NULL);
 
@@ -85,7 +85,7 @@ static bool check_dns_query(uint8_t *buf, int buf_len)
 
 	NET_DBG("[%d] query %s/%s label %s (%d bytes)", queries,
 		qtype == DNS_RR_TYPE_A ? "A" : "AAAA", "IN",
-		log_strdup(result->data), ret);
+		result->data, ret);
 
 	/* In this test we are just checking if the query came to us in correct
 	 * form, we are not creating a DNS server implementation here.
@@ -107,8 +107,6 @@ static int process_dns(void)
 	struct sockaddr *addr;
 	socklen_t addr_len;
 	int ret, idx;
-
-	(void)sys_mutex_lock(&wait_data, K_FOREVER);
 
 	NET_DBG("Waiting for IPv4 DNS packets on port %d",
 		ntohs(addr_v4.sin_port));
@@ -154,7 +152,7 @@ static int process_dns(void)
 				ret = check_dns_query(recv_buf,
 						      sizeof(recv_buf));
 				if (ret) {
-					sys_mutex_unlock(&wait_data);
+					(void)sys_sem_give(&wait_data);
 				}
 			}
 		}
@@ -167,7 +165,7 @@ K_THREAD_DEFINE(dns_server_thread_id, STACK_SIZE,
 		process_dns, NULL, NULL, NULL,
 		THREAD_PRIORITY, 0, -1);
 
-void test_getaddrinfo_setup(void)
+static void *test_getaddrinfo_setup(void)
 {
 	char str[INET6_ADDRSTRLEN], *addr_str;
 	struct sockaddr addr;
@@ -196,39 +194,48 @@ void test_getaddrinfo_setup(void)
 	}
 
 	addr_str = inet_ntop(AF_INET, &addr_v4.sin_addr, str, sizeof(str));
-	NET_DBG("v4: [%s]:%d", log_strdup(addr_str), ntohs(addr_v4.sin_port));
+	NET_DBG("v4: [%s]:%d", addr_str, ntohs(addr_v4.sin_port));
 
 	sock_v4 = prepare_listen_sock_udp_v4(&addr_v4);
 	zassert_true(sock_v4 >= 0, "Invalid IPv4 socket");
 
 	addr_str = inet_ntop(AF_INET6, &addr_v6.sin6_addr, str, sizeof(str));
-	NET_DBG("v6: [%s]:%d", log_strdup(addr_str), ntohs(addr_v6.sin6_port));
+	NET_DBG("v6: [%s]:%d", addr_str, ntohs(addr_v6.sin6_port));
 
 	sock_v6 = prepare_listen_sock_udp_v6(&addr_v6);
 	zassert_true(sock_v6 >= 0, "Invalid IPv6 socket");
 
+	sys_sem_init(&wait_data, 0, INT_MAX);
+
 	k_thread_start(dns_server_thread_id);
 
+	k_thread_priority_set(dns_server_thread_id,
+			      k_thread_priority_get(k_current_get()));
 	k_yield();
+
+	return NULL;
 }
 
-void test_getaddrinfo_ok(void)
+ZTEST(net_socket_getaddrinfo, test_getaddrinfo_ok)
 {
 	struct addrinfo *res = NULL;
 
 	queries_received = 0;
 
 	/* This check simulates a local query that we will catch
-	 * in dns_process() function. So we do not check the res variable
+	 * in process_dns() function. So we do not check the res variable
 	 * as that will currently not contain anything useful. We just check
-	 * that the query triggered a function call to dns_process() function
+	 * that the query triggered a function call to process_dns() function
 	 * and that it could parse the DNS query.
 	 */
 	(void)getaddrinfo(QUERY_HOST, NULL, NULL, &res);
 
-	if (sys_mutex_lock(&wait_data, WAIT_TIME)) {
-		zassert_true(false, "Timeout DNS query not received");
+	if (sys_sem_count_get(&wait_data) != 2) {
+		zassert_true(false, "Did not receive all queries");
 	}
+
+	(void)sys_sem_take(&wait_data, K_NO_WAIT);
+	(void)sys_sem_take(&wait_data, K_NO_WAIT);
 
 	zassert_equal(queries_received, 2,
 		      "Did not receive both IPv4 and IPv6 query");
@@ -236,12 +243,19 @@ void test_getaddrinfo_ok(void)
 	freeaddrinfo(res);
 }
 
-void test_getaddrinfo_cancelled(void)
+ZTEST(net_socket_getaddrinfo, test_getaddrinfo_cancelled)
 {
 	struct addrinfo *res = NULL;
 	int ret;
 
 	ret = getaddrinfo(QUERY_HOST, NULL, NULL, &res);
+
+	if (sys_sem_count_get(&wait_data) != 2) {
+		zassert_true(false, "Did not receive all queries");
+	}
+
+	(void)sys_sem_take(&wait_data, K_NO_WAIT);
+	(void)sys_sem_take(&wait_data, K_NO_WAIT);
 
 	/* Without a local DNS server this request will be canceled. */
 	zassert_equal(ret, DNS_EAI_CANCELED, "Invalid result");
@@ -249,7 +263,7 @@ void test_getaddrinfo_cancelled(void)
 	freeaddrinfo(res);
 }
 
-void test_getaddrinfo_no_host(void)
+ZTEST(net_socket_getaddrinfo, test_getaddrinfo_no_host)
 {
 	struct addrinfo *res = NULL;
 	int ret;
@@ -263,7 +277,7 @@ void test_getaddrinfo_no_host(void)
 	freeaddrinfo(res);
 }
 
-void test_getaddrinfo_num_ipv4(void)
+ZTEST(net_socket_getaddrinfo, test_getaddrinfo_num_ipv4)
 {
 	struct zsock_addrinfo *res = NULL;
 	struct sockaddr_in *saddr;
@@ -312,7 +326,7 @@ void test_getaddrinfo_num_ipv4(void)
 	zsock_freeaddrinfo(res);
 }
 
-void test_getaddrinfo_num_ipv6(void)
+ZTEST(net_socket_getaddrinfo, test_getaddrinfo_num_ipv6)
 {
 	struct zsock_addrinfo *res = NULL;
 	struct sockaddr_in6 *saddr;
@@ -521,7 +535,7 @@ void test_getaddrinfo_num_ipv6(void)
 	zsock_freeaddrinfo(res);
 }
 
-void test_getaddrinfo_flags_numerichost(void)
+ZTEST(net_socket_getaddrinfo, test_getaddrinfo_flags_numerichost)
 {
 	int ret;
 	struct zsock_addrinfo *res = NULL;
@@ -540,7 +554,7 @@ void test_getaddrinfo_flags_numerichost(void)
 	zsock_freeaddrinfo(res);
 }
 
-static void test_getaddrinfo_ipv4_hints_ipv6(void)
+ZTEST(net_socket_getaddrinfo, test_getaddrinfo_ipv4_hints_ipv6)
 {
 	struct zsock_addrinfo *res = NULL;
 	struct zsock_addrinfo hints = {
@@ -551,9 +565,10 @@ static void test_getaddrinfo_ipv4_hints_ipv6(void)
 	ret = zsock_getaddrinfo("192.0.2.1", NULL, &hints, &res);
 	zassert_equal(ret, DNS_EAI_ADDRFAMILY, "Invalid result (%d)", ret);
 	zassert_is_null(res, "");
+	zsock_freeaddrinfo(res);
 }
 
-static void test_getaddrinfo_ipv6_hints_ipv4(void)
+ZTEST(net_socket_getaddrinfo, test_getaddrinfo_ipv6_hints_ipv4)
 {
 	struct zsock_addrinfo *res = NULL;
 	struct zsock_addrinfo hints = {
@@ -564,18 +579,20 @@ static void test_getaddrinfo_ipv6_hints_ipv4(void)
 	ret = zsock_getaddrinfo("2001:db8::1", NULL, &hints, &res);
 	zassert_equal(ret, DNS_EAI_ADDRFAMILY, "Invalid result (%d)", ret);
 	zassert_is_null(res, "");
+	zsock_freeaddrinfo(res);
 }
 
-static void test_getaddrinfo_port_invalid(void)
+ZTEST(net_socket_getaddrinfo, test_getaddrinfo_port_invalid)
 {
 	int ret;
 	struct zsock_addrinfo *res = NULL;
 	ret = zsock_getaddrinfo("192.0.2.1", "70000", NULL, &res);
 	zassert_equal(ret, DNS_EAI_NONAME, "Invalid result (%d)", ret);
 	zassert_is_null(res, "");
+	zsock_freeaddrinfo(res);
 }
 
-static void test_getaddrinfo_null_host(void)
+ZTEST(net_socket_getaddrinfo, test_getaddrinfo_null_host)
 {
 	struct sockaddr_in *saddr;
 	struct sockaddr_in6 *saddr6;
@@ -645,23 +662,4 @@ static void test_getaddrinfo_null_host(void)
 	zsock_freeaddrinfo(res);
 }
 
-
-void test_main(void)
-{
-	k_thread_system_pool_assign(k_current_get());
-
-	ztest_test_suite(socket_getaddrinfo,
-			 ztest_unit_test(test_getaddrinfo_setup),
-			 ztest_unit_test(test_getaddrinfo_ok),
-			 ztest_unit_test(test_getaddrinfo_cancelled),
-			 ztest_unit_test(test_getaddrinfo_no_host),
-			 ztest_unit_test(test_getaddrinfo_num_ipv4),
-			 ztest_unit_test(test_getaddrinfo_num_ipv6),
-			 ztest_unit_test(test_getaddrinfo_flags_numerichost),
-			 ztest_unit_test(test_getaddrinfo_ipv4_hints_ipv6),
-			 ztest_unit_test(test_getaddrinfo_ipv6_hints_ipv4),
-			 ztest_unit_test(test_getaddrinfo_port_invalid),
-			 ztest_unit_test(test_getaddrinfo_null_host));
-
-	ztest_run_test_suite(socket_getaddrinfo);
-}
+ZTEST_SUITE(net_socket_getaddrinfo, NULL, test_getaddrinfo_setup, NULL, NULL, NULL);

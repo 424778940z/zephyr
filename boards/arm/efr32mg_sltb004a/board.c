@@ -4,9 +4,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <init.h>
-#include <drivers/gpio.h>
-#include <sys/printk.h>
+#include <zephyr/init.h>
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/sys/printk.h>
 
 struct supply_cfg {
 	const struct device *gpio;
@@ -39,7 +39,6 @@ static int efr32mg_sltb004a_init(const struct device *dev)
 #define CCS811 DT_NODELABEL(ccs811)
 
 #if DT_NODE_HAS_STATUS(CCS811, okay)
-	DEVICE_DT_DECLARE(DT_GPIO_CTLR(CCS811, supply_gpios));
 	cfg = (struct supply_cfg){
 		.gpio = DEVICE_DT_GET(DT_GPIO_CTLR(CCS811, supply_gpios)),
 		.pin = DT_GPIO_PIN(CCS811, supply_gpios),
@@ -57,4 +56,5 @@ static int efr32mg_sltb004a_init(const struct device *dev)
 }
 
 /* needs to be done after GPIO driver init */
-SYS_INIT(efr32mg_sltb004a_init, PRE_KERNEL_1, CONFIG_BOARD_INIT_PRIORITY);
+SYS_INIT(efr32mg_sltb004a_init, POST_KERNEL,
+	 CONFIG_KERNEL_INIT_PRIORITY_DEVICE);

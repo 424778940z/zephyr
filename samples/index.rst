@@ -8,6 +8,7 @@ Samples and Demos
    :maxdepth: 2
    :glob:
 
+   sample_definition_and_criteria
    classic
    basic/*
    userspace/*
@@ -15,19 +16,16 @@ Samples and Demos
    net/net.rst
    bluetooth/bluetooth.rst
    sensor/*
+   arch/*
    boards/*
-   mpu/*
    drivers/drivers.rst
    application_development/*
-   display/*
    shields/*
-   portability/*
    posix/*
-   video/*
-   scheduler/*
-   smp/*
+   kernel/*
    tfm_integration/tfm_integration.rst
-   debug/*
+   modules/*
+   compression/*
 
 .. comment
    To add a new sample document, please use the template available under

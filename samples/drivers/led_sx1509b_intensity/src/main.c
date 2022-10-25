@@ -4,10 +4,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <zephyr.h>
-#include <device.h>
-#include <drivers/gpio.h>
-#include <drivers/gpio/gpio_sx1509b.h>
+#include <zephyr/kernel.h>
+#include <zephyr/device.h>
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/gpio/gpio_sx1509b.h>
 
 #define NUMBER_OF_LEDS 3
 #define GREEN_LED DT_GPIO_PIN(DT_NODELABEL(led0), gpios)
@@ -17,7 +17,7 @@
 enum sx1509b_color { sx1509b_red = 0, sx1509b_green, sx1509b_blue };
 
 const struct device *sx1509b_dev;
-static struct k_delayed_work rgb_work;
+static struct k_work_delayable rgb_work;
 static uint8_t which_color = sx1509b_red;
 static uint8_t iterator;
 
@@ -62,7 +62,7 @@ static void rgb_work_handler(struct k_work *work)
 		}
 	}
 
-	k_delayed_work_submit(&rgb_work, K_MSEC(10));
+	k_work_schedule(k_work_delayable_from_work(work), K_MSEC(10));
 }
 
 void main(void)
@@ -71,11 +71,10 @@ void main(void)
 
 	printk("SX1509B intensity sample\n");
 
-	sx1509b_dev = device_get_binding(DT_PROP(DT_NODELABEL(sx1509b), label));
+	sx1509b_dev = DEVICE_DT_GET(DT_NODELABEL(sx1509b));
 
-	if (sx1509b_dev == NULL) {
-		printk("Error binding SX1509B device\n");
-
+	if (!device_is_ready(sx1509b_dev)) {
+		printk("sx1509b: device not ready.\n");
 		return;
 	}
 
@@ -88,6 +87,6 @@ void main(void)
 		}
 	}
 
-	k_delayed_work_init(&rgb_work, rgb_work_handler);
-	k_delayed_work_submit(&rgb_work, K_NO_WAIT);
+	k_work_init_delayable(&rgb_work, rgb_work_handler);
+	k_work_schedule(&rgb_work, K_NO_WAIT);
 }

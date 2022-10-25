@@ -6,8 +6,11 @@
 
 #define DT_DRV_COMPAT zephyr_sim_ec_host_cmd_periph
 
-#include <device.h>
-#include <drivers/ec_host_cmd_periph.h>
+#include <errno.h>
+
+#include <zephyr/device.h>
+#include <zephyr/drivers/ec_host_cmd_periph.h>
+#include <zephyr/kernel.h>
 #include <string.h>
 
 #ifndef CONFIG_ARCH_POSIX
@@ -80,6 +83,6 @@ static int ec_host_cmd_sim_init(const struct device *dev)
 }
 
 /* Assume only one simulator */
-DEVICE_DT_INST_DEFINE(0, ec_host_cmd_sim_init, device_pm_control_nop,
+DEVICE_DT_INST_DEFINE(0, ec_host_cmd_sim_init, NULL,
 		    NULL, NULL, POST_KERNEL,
 		    CONFIG_KERNEL_INIT_PRIORITY_DEVICE, &ec_host_cmd_api);

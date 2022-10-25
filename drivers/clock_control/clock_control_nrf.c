@@ -6,18 +6,14 @@
  */
 
 #include <soc.h>
-#include <sys/onoff.h>
-#include <drivers/clock_control.h>
-#include <drivers/clock_control/nrf_clock_control.h>
+#include <zephyr/sys/onoff.h>
+#include <zephyr/drivers/clock_control.h>
+#include <zephyr/drivers/clock_control/nrf_clock_control.h>
 #include "nrf_clock_calibration.h"
 #include <nrfx_clock.h>
-#include <logging/log.h>
-#include <shell/shell.h>
-
-#if defined(CONFIG_SOC_NRF5340_CPUAPP) && \
-	!defined(CONFIG_TRUSTED_EXECUTION_NONSECURE)
-#include <hal/nrf_gpio.h>
-#endif
+#include <zephyr/logging/log.h>
+#include <zephyr/shell/shell.h>
+#include <zephyr/irq.h>
 
 LOG_MODULE_REGISTER(clock_control, CONFIG_CLOCK_CONTROL_LOG_LEVEL);
 
@@ -110,8 +106,6 @@ static struct onoff_manager *get_onoff_manager(const struct device *dev,
 }
 
 
-DEVICE_DT_DECLARE(DT_NODELABEL(clock));
-
 #define CLOCK_DEVICE DEVICE_DT_GET(DT_NODELABEL(clock))
 
 struct onoff_manager *z_nrf_clock_control_get_onoff(clock_control_subsys_t sys)
@@ -133,7 +127,7 @@ static enum clock_control_status get_status(const struct device *dev,
 static int set_off_state(uint32_t *flags, uint32_t ctx)
 {
 	int err = 0;
-	int key = irq_lock();
+	unsigned int key = irq_lock();
 	uint32_t current_ctx = GET_CTX(*flags);
 
 	if ((current_ctx != 0) && (current_ctx != ctx)) {
@@ -150,7 +144,7 @@ static int set_off_state(uint32_t *flags, uint32_t ctx)
 static int set_starting_state(uint32_t *flags, uint32_t ctx)
 {
 	int err = 0;
-	int key = irq_lock();
+	unsigned int key = irq_lock();
 	uint32_t current_ctx = GET_CTX(*flags);
 
 	if ((*flags & (STATUS_MASK)) == CLOCK_CONTROL_STATUS_OFF) {
@@ -168,7 +162,7 @@ static int set_starting_state(uint32_t *flags, uint32_t ctx)
 
 static void set_on_state(uint32_t *flags)
 {
-	int key = irq_lock();
+	unsigned int key = irq_lock();
 
 	*flags = CLOCK_CONTROL_STATUS_ON | GET_CTX(*flags);
 	irq_unlock(key);
@@ -213,7 +207,7 @@ static void lfclk_start(void)
 
 static void lfclk_stop(void)
 {
-	if (IS_ENABLED(CONFIG_CLOCK_CONTROL_NRF_K32SRC_RC_CALIBRATION)) {
+	if (IS_ENABLED(CONFIG_CLOCK_CONTROL_NRF_DRIVER_CALIBRATION)) {
 		z_nrf_clock_calibration_lfclk_stopped();
 	}
 
@@ -273,7 +267,7 @@ static void generic_hfclk_start(void)
 {
 	nrf_clock_hfclk_t type;
 	bool already_started = false;
-	int key = irq_lock();
+	unsigned int key = irq_lock();
 
 	hfclk_users |= HF_USER_GENERIC;
 	if (hfclk_users & HF_USER_BT) {
@@ -502,7 +496,7 @@ static void lfclk_spinwait(enum nrf_lfclk_start_mode mode)
 		 * happen before calling idle. That would lead to deadlock.
 		 */
 		if (!IS_ENABLED(CONFIG_CLOCK_CONTROL_NRF_K32SRC_SYNTH)) {
-			if (isr_mode) {
+			if (isr_mode || !IS_ENABLED(CONFIG_MULTITHREADING)) {
 				k_cpu_atomic_idle(key);
 			} else {
 				k_msleep(1);
@@ -600,21 +594,43 @@ static void clock_event_handler(nrfx_clock_evt_type_t event)
 		break;
 #endif
 	case NRFX_CLOCK_EVT_LFCLK_STARTED:
-		if (IS_ENABLED(
-			CONFIG_CLOCK_CONTROL_NRF_K32SRC_RC_CALIBRATION)) {
+		if (IS_ENABLED(CONFIG_CLOCK_CONTROL_NRF_DRIVER_CALIBRATION)) {
 			z_nrf_clock_calibration_lfclk_started();
 		}
 		clkstarted_handle(dev, CLOCK_CONTROL_NRF_TYPE_LFCLK);
 		break;
 	case NRFX_CLOCK_EVT_CAL_DONE:
-		if (IS_ENABLED(CONFIG_CLOCK_CONTROL_NRF_K32SRC_RC_CALIBRATION)) {
+		if (IS_ENABLED(CONFIG_CLOCK_CONTROL_NRF_DRIVER_CALIBRATION)) {
 			z_nrf_clock_calibration_done_handler();
+		} else {
+			/* Should not happen when calibration is disabled. */
+			__ASSERT_NO_MSG(false);
 		}
 		break;
 	default:
 		__ASSERT_NO_MSG(0);
 		break;
 	}
+}
+
+static void hfclkaudio_init(void)
+{
+#if DT_NODE_HAS_PROP(DT_NODELABEL(clock), hfclkaudio_frequency)
+	const uint32_t frequency =
+		DT_PROP(DT_NODELABEL(clock), hfclkaudio_frequency);
+	/* As specified in the nRF5340 PS:
+	 *
+	 * FREQ_VALUE = 2^16 * ((12 * f_out / 32M) - 4)
+	 */
+	const uint32_t freq_value =
+		(uint32_t)((384ULL * frequency) / 15625) - 262144;
+
+#if NRF_CLOCK_HAS_HFCLKAUDIO
+	nrf_clock_hfclkaudio_config_set(NRF_CLOCK, freq_value);
+#else
+#error "hfclkaudio-frequency specified but HFCLKAUDIO clock is not present."
+#endif /* NRF_CLOCK_HAS_HFCLKAUDIO */
+#endif
 }
 
 static int clk_init(const struct device *dev)
@@ -628,14 +644,15 @@ static int clk_init(const struct device *dev)
 
 	IRQ_CONNECT(DT_INST_IRQN(0), DT_INST_IRQ(0, priority),
 		    nrfx_isr, nrfx_power_clock_irq_handler, 0);
-	irq_enable(DT_INST_IRQN(0));
 
 	nrfx_err = nrfx_clock_init(clock_event_handler);
 	if (nrfx_err != NRFX_SUCCESS) {
 		return -EIO;
 	}
 
-	if (IS_ENABLED(CONFIG_CLOCK_CONTROL_NRF_K32SRC_RC_CALIBRATION)) {
+	hfclkaudio_init();
+
+	if (IS_ENABLED(CONFIG_CLOCK_CONTROL_NRF_DRIVER_CALIBRATION)) {
 		struct nrf_clock_control_data *data = dev->data;
 
 		z_nrf_clock_calibration_init(data->mgr);
@@ -698,9 +715,9 @@ static const struct nrf_clock_control_config config = {
 	}
 };
 
-DEVICE_DT_DEFINE(DT_NODELABEL(clock), clk_init, device_pm_control_nop,
+DEVICE_DT_DEFINE(DT_NODELABEL(clock), clk_init, NULL,
 		 &data, &config,
-		 PRE_KERNEL_1, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,
+		 PRE_KERNEL_1, CONFIG_CLOCK_CONTROL_INIT_PRIORITY,
 		 &clock_control_api);
 
 static int cmd_status(const struct shell *shell, size_t argc, char **argv)
@@ -715,7 +732,7 @@ static int cmd_status(const struct shell *shell, size_t argc, char **argv)
 				get_onoff_manager(CLOCK_DEVICE,
 						  CLOCK_CONTROL_NRF_TYPE_LFCLK);
 	uint32_t abs_start, abs_stop;
-	int key = irq_lock();
+	unsigned int key = irq_lock();
 	uint64_t now = k_uptime_get();
 
 	(void)nrfx_clock_is_running(NRF_CLOCK_DOMAIN_HFCLK, (void *)&hfclk_src);
@@ -746,5 +763,5 @@ SHELL_STATIC_SUBCMD_SET_CREATE(subcmds,
 
 SHELL_COND_CMD_REGISTER(CONFIG_CLOCK_CONTROL_NRF_SHELL,
 			nrf_clock_control, &subcmds,
-			"Clock control commmands",
+			"Clock control commands",
 			cmd_status);

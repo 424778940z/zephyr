@@ -41,7 +41,7 @@ def get_cld_pid(mdb_process):
 # MDB creates child process (cld) which won't be terminated if we simply
 # terminate parents process (mdb). 'record_cld_pid' is provided to record 'cld'
 # process pid to file (mdb.pid) so this process can be terminated correctly by
-# sanitycheck infrastructure
+# twister infrastructure
 def record_cld_pid(mdb_runner, mdb_process):
     for _i in range(100):
         found, pid = get_cld_pid(mdb_process)
@@ -104,8 +104,8 @@ def mdb_do_run(mdb_runner, command):
             # core will download the shared image.
                          ('-prop=download=2' if i > 0 else '')] +
                          mdb_basic_options + mdb_target + [mdb_runner.elf_name])
-            mdb_runner.check_call(mdb_sub_cmd)
-            mdb_multifiles += (',core{}'.format(i) if i > 0 else 'core{}'.format(i))
+            mdb_runner.check_call(mdb_sub_cmd, cwd=mdb_runner.build_dir)
+            mdb_multifiles += ('core{}'.format(mdb_runner.cores-1-i) if i == 0 else ',core{}'.format(mdb_runner.cores-1-i))
 
         # to enable multi-core aware mode for use with the MetaWare debugger,
         # need to set the NSIM_MULTICORE environment variable to a non-zero value
@@ -116,7 +116,7 @@ def mdb_do_run(mdb_runner, command):
     else:
         raise ValueError('unsupported cores {}'.format(mdb_runner.cores))
 
-    process = mdb_runner.popen_ignore_int(mdb_cmd)
+    process = mdb_runner.popen_ignore_int(mdb_cmd, cwd=mdb_runner.build_dir)
     record_cld_pid(mdb_runner, process)
 
 
@@ -192,7 +192,7 @@ class MdbHwBinaryRunner(ZephyrBinaryRunner):
     def do_add_parser(cls, parser):
         parser.add_argument('--jtag', default='digilent',
                             help='''choose the jtag interface for hardware
-                                    targets, e.g. --jtat=digilent for digilent
+                                    targets, e.g. --jtag=digilent for digilent
                                     jtag adapter''')
         parser.add_argument('--cores', default=1,
                             help='''choose the number of cores that target has,

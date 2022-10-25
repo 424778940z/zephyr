@@ -21,10 +21,8 @@ some highlights of the Nucleo L433RC board:
 - Three LEDs: USB communication (LD1), power LED (LD3), user LED (LD4)
 - One push-button: RESET
 
-.. image:: img/nucleo_l433rc_p.png
-  :width: 250px
+.. image:: img/nucleo_l433rc_p.jpg
   :align: center
-  :height: 188px
   :alt: Nucleo L433RC
 
 More information about the board can be found at the `Nucleo L433RC-P website`_.
@@ -119,6 +117,8 @@ The Zephyr nucleo_l433rc_p board configuration supports the following hardware f
 +-----------+------------+-------------------------------------+
 | CAN       | on-chip    | can                                 |
 +-----------+------------+-------------------------------------+
+| SPI       | on-chip    | spi                                 |
++-----------+------------+-------------------------------------+
 
 .. note:: CAN feature requires CAN transceiver
 
@@ -136,10 +136,8 @@ input/output, pull-up, etc.
 
 Available pins:
 ---------------
-.. image:: img/nucleo_l433rc_p_pinout.png
-   :width: 960px
+.. image:: img/nucleo_l433rc_p_pinout.jpg
    :align: center
-   :height: 720px
    :alt: Nucleo L433RC-P
 
 For mode details please refer to `ST Nucleo L433RC-P User Manual`_.
@@ -155,6 +153,8 @@ Default Zephyr Peripheral Mapping:
 - I2C_1_SDA : PB7
 - PWM_2_CH1 : PA0
 - LD4 : PB13
+- SPI_1: NSS/SCK/MISO/MOSI : PA4/PA5/PA6/PA7
+- SPI_2: NSS/SCK/MISO/MOSI : PA11/PB13/PB14/PB15 (Arduino SPI)
 
 System Clock
 ------------

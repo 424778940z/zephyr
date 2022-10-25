@@ -20,11 +20,9 @@
  * of pins information.
  */
 
-#include <drivers/pinmux.h>
+#include <errno.h>
 
-
-#define DEV_CFG(dev)  ((const struct pinmux_lpc11u6x_config *) \
-		      ((dev)->config))
+#include <zephyr/drivers/pinmux.h>
 
 struct pinmux_lpc11u6x_config {
 	uint8_t port;
@@ -35,7 +33,7 @@ struct pinmux_lpc11u6x_config {
 static int pinmux_lpc11u6x_set(const struct device *dev, uint32_t pin,
 			       uint32_t func)
 {
-	const struct pinmux_lpc11u6x_config *config = DEV_CFG(dev);
+	const struct pinmux_lpc11u6x_config *config = dev->config;
 	volatile uint32_t *base;
 
 	if (pin >= config->npins) {
@@ -57,7 +55,7 @@ static int pinmux_lpc11u6x_set(const struct device *dev, uint32_t pin,
 static int
 pinmux_lpc11u6x_get(const struct device *dev, uint32_t pin, uint32_t *func)
 {
-	const struct pinmux_lpc11u6x_config *config = DEV_CFG(dev);
+	const struct pinmux_lpc11u6x_config *config = dev->config;
 	volatile uint32_t *base;
 
 	if (pin >= config->npins) {
@@ -109,9 +107,8 @@ static const struct pinmux_lpc11u6x_config			\
 };								\
 								\
 DEVICE_DT_INST_DEFINE(id, &pinmux_lpc11u6x_init,		\
-		    device_pm_control_nop, NULL,		\
-		    &pinmux_lpc11u6x_config_##id, PRE_KERNEL_1,	\
-		    CONFIG_PINMUX_INIT_PRIORITY,		\
+		    NULL, NULL, &pinmux_lpc11u6x_config_##id,	\
+		    PRE_KERNEL_1, CONFIG_PINMUX_INIT_PRIORITY,	\
 		    &pinmux_lpc11u6x_driver_api);
 
 DT_INST_FOREACH_STATUS_OKAY(PINMUX_LPC11U6X_INIT)

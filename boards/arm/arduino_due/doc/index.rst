@@ -23,8 +23,7 @@ the processor.
 .. note::
    This configuration is not supported by Arduino.
 
-.. image:: img/arduino_due.png
-     :width: 500px
+.. image:: img/arduino_due.jpg
      :align: center
      :alt: Arduino Due
 
@@ -95,8 +94,9 @@ identifies the handlers used for each exception.
 |      |            | attempt to ARM |                       |
 |      |            | mode           |                       |
 +------+------------+----------------+-----------------------+
-| 11   | SVC        |                | context switch and    |
-|      |            |                | software interrupts   |
+| 11   | SVC        |                | system calls, kernel  |
+|      |            |                | run-time exceptions,  |
+|      |            |                | and IRQ offloading    |
 +------+------------+----------------+-----------------------+
 | 12   | Debug      |                | system fatal error    |
 |      | monitor    |                |                       |

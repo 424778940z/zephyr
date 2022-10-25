@@ -11,14 +11,10 @@ with a wide range of connectivity support and configurations. There are
 multiple version of this board like ``stm32f103_mini``.
 
 .. image:: img/stm32f103_mini_yellow.jpg
-   :width: 500px
-   :height: 367px
    :align: center
    :alt: STM32F103 Mini Yellow
 
 .. image:: img/stm32f103_mini_blue.jpg
-   :width: 500px
-   :height: 367px
    :align: center
    :alt: STM32F103 Mini Blue
 
@@ -75,6 +71,12 @@ The Zephyr stm32f103_mini board configuration supports the following hardware fe
 +-----------+------------+-------------------------------------+
 | SPI       | on-chip    | spi                                 |
 +-----------+------------+-------------------------------------+
+| USB       | on-chip    | USB device                          |
++-----------+------------+-------------------------------------+
+| COUNTER   | on-chip    | rtc                                 |
++-----------+------------+-------------------------------------+
+| RTC       | on-chip    | rtc                                 |
++-----------+------------+-------------------------------------+
 
 Other hardware features are not yet supported in this Zephyr port.
 
@@ -92,22 +94,26 @@ capable except for analog inputs.
 Board connectors:
 -----------------
 .. image:: img/stm32f103_mini_pin.jpg
-   :width: 800px
    :align: center
-   :height: 619px
    :alt: Nucleo F103RB connectors
 
 Default Zephyr Peripheral Mapping:
 ----------------------------------
 
-- UART_1 TX/RX : PA9/PA10
-- UART_2 TX/RX : PA2/PA3 (ST-Link Virtual COM Port)
-- SPI1 NSS/SCK/MISO/MOSI : PA4/PA5/PA6/PA7
-- SPI2 NSS/SCK/MISO/MOSI : PB12/PB13/PB14/PB15
+- UART_1 TX/RX: PA9/PA10
+- UART_2 TX/RX: PA2/PA3 (ST-Link Virtual COM Port)
+- SPI1 NSS/SCK/MISO/MOSI: PA4/PA5/PA6/PA7
+- SPI2 NSS/SCK/MISO/MOSI: PB12/PB13/PB14/PB15
 - I2C1 SDA/SCL: PB9/PB8
 - PWM1_CH1: PA8
-- USER_PB : PC13
-- LD1 : PA5
+- USER_PB: PC13
+- LD1: PA5
+- USB_DC DM/DP: PA11/PA12
+
+System Clock
+------------
+
+The on-board 8MHz crystal is used to produce a 72MHz system clock with PLL.
 
 Programming and Debugging
 *************************

@@ -7,7 +7,8 @@ if SOC_FAMILY_STM32
 
 config EXTI_STM32
 	bool "External Interrupt/Event Controller (EXTI) Driver for STM32 family of MCUs"
-	default y if SOC_FAMILY_STM32
+	default y
+	depends on DT_HAS_ST_STM32_EXTI_ENABLED
 	help
 	  Enable EXTI driver for STM32 line of MCUs
 
@@ -72,7 +73,7 @@ config EXTI_STM32_EXTI4_IRQ_PRI
 	help
 	  IRQ priority of EXTI4 interrupt
 
-if SOC_SERIES_STM32MP1X || SOC_SERIES_STM32L5X
+if SOC_SERIES_STM32MP1X || SOC_SERIES_STM32L5X || SOC_SERIES_STM32U5X
 
 config EXTI_STM32_EXTI5_IRQ_PRI
 	int "EXTI5 IRQ priority"
@@ -153,7 +154,7 @@ config EXTI_STM32_EXTI15_IRQ_PRI
 
 endif # SOC_SERIES_STM32MP1X
 
-if SOC_SERIES_STM32MP1X!=y && SOC_SERIES_STM32L5X!=y
+if SOC_SERIES_STM32MP1X!=y && SOC_SERIES_STM32L5X!=y && SOC_SERIES_STM32U5X!=y
 
 config EXTI_STM32_EXTI9_5_IRQ_PRI
 	int "EXTI9:5 IRQ priority"

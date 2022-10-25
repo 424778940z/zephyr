@@ -7,12 +7,13 @@
 #define DT_DRV_COMPAT nordic_nrf_ipc
 
 #include <string.h>
-#include <drivers/ipm.h>
+#include <zephyr/drivers/ipm.h>
 #include <nrfx_ipc.h>
 #include "ipm_nrfx_ipc.h"
 
 #define LOG_LEVEL CONFIG_IPM_LOG_LEVEL
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/irq.h>
 LOG_MODULE_REGISTER(ipm_nrfx_ipc);
 
 struct ipm_nrf_data {
@@ -26,8 +27,6 @@ static void gipm_init(void);
 static void gipm_send(uint32_t id);
 
 #if IS_ENABLED(CONFIG_IPM_NRF_SINGLE_INSTANCE)
-
-DEVICE_DT_INST_DECLARE(0);
 
 static void nrfx_ipc_handler(uint32_t event_mask, void *p_context)
 {
@@ -110,7 +109,7 @@ static const struct ipm_driver_api ipm_nrf_driver_api = {
 	.set_enabled = ipm_nrf_set_enabled
 };
 
-DEVICE_DT_INST_DEFINE(0, ipm_nrf_init, device_pm_control_nop, NULL, NULL,
+DEVICE_DT_INST_DEFINE(0, ipm_nrf_init, NULL, NULL, NULL,
 		    PRE_KERNEL_1, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT,
 		    &ipm_nrf_driver_api);
 
@@ -228,14 +227,14 @@ static const struct ipm_driver_api vipm_nrf_##_idx##_driver_api = {	\
 };									\
 									\
 DEVICE_DEFINE(vipm_nrf_##_idx, "IPM_"#_idx,				\
-		    vipm_nrf_init, device_pm_control_nop, NULL, NULL,	\
+		    vipm_nrf_init, NULL, NULL, NULL,			\
 		    PRE_KERNEL_2, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT,	\
 		    &vipm_nrf_##_idx##_driver_api)
 
 #define VIPM_DEVICE(_idx, _)						\
-	IF_ENABLED(CONFIG_IPM_MSG_CH_##_idx##_ENABLE, (VIPM_DEVICE_1(_idx);))
+	IF_ENABLED(CONFIG_IPM_MSG_CH_##_idx##_ENABLE, (VIPM_DEVICE_1(_idx)))
 
-UTIL_LISTIFY(NRFX_IPC_ID_MAX_VALUE, VIPM_DEVICE, _);
+LISTIFY(NRFX_IPC_ID_MAX_VALUE, VIPM_DEVICE, (;), _);
 
 #endif
 

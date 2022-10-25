@@ -25,6 +25,7 @@ choice
 config MCUBOOT_IMG_MANAGER
 	bool "Image manager for mcuboot"
 	select FLASH_MAP
+	select MCUBOOT_BOOTUTIL_LIB
 	help
 	  Enable support for managing DFU image downloaded using mcuboot.
 
@@ -70,7 +71,7 @@ config IMG_ERASE_PROGRESSIVELY
 	  times at the beginning of the DFU process.
 
 config IMG_ENABLE_IMAGE_CHECK
-	bool "Enable image check functions"
+	bool "Image check functions"
 	depends on MCUBOOT_IMG_MANAGER
 	select FLASH_AREA_CHECK_INTEGRITY
 	help
@@ -83,5 +84,15 @@ config IMG_ENABLE_IMAGE_CHECK
 module = IMG_MANAGER
 module-str = image manager
 source "subsys/logging/Kconfig.template.log_config"
+
+if !MCUBOOT
+config UPDATEABLE_IMAGE_NUMBER
+	int "Number of updateable images"
+	default 1
+	range 1 2
+	help
+	  If value is set to 2 or greater then, this enables support needed when
+	  application is combined with MCUboot multi-image boot.
+endif
 
 endif # IMG_MANAGER

@@ -50,7 +50,6 @@ and the following devices:
 * :abbr:`HL7800 (Sierra Wireless HL7800 LTE-M1/NB-IoT modem)`
 
 .. figure:: img/pinnacle_100_dvk.jpg
-     :width: 1000px
      :align: center
      :alt: Pinnacle 100 DVK
 
@@ -207,15 +206,6 @@ the board are working properly with Zephyr:
 You can build and flash the examples to make sure Zephyr is running correctly on
 your board. The button and LED definitions can be found in
 :zephyr_file:`boards/arm/pinnacle_100_dvk/pinnacle_100_dvk.dts`.
-
-
-Overlay file naming
-===================
-
-The file has to be named ``<board>.overlay`` and placed in the app main directory to be
-picked up automatically by the build system.
-
-See :ref:`set-devicetree-overlays` for further details.
 
 Selecting the pins
 ==================

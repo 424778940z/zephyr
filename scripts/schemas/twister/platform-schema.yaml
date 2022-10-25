@@ -13,6 +13,10 @@ type: map
 mapping:
   "identifier":
     type: str
+  "maintainers":
+    type: seq
+    seq:
+      - type: str
   "name":
     type: str
   "type":
@@ -20,7 +24,7 @@ mapping:
     enum: ["mcu", "qemu", "sim", "unit", "native"]
   "simulation":
     type: str
-    enum: ["qemu", "simics", "xt-sim", "renode", "nsim", "mdb-nsim", "tsim"]
+    enum: ["qemu", "simics", "xt-sim", "renode", "nsim", "mdb-nsim", "tsim", "armfvp"]
   "arch":
     type: str
   "toolchain":
@@ -44,6 +48,9 @@ mapping:
   "testing":
     type: map
     mapping:
+      "timeout_multiplier":
+        type: number
+        required: false
       "default":
         type: bool
       "only_tags":

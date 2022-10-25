@@ -5,12 +5,9 @@ description: Nuvoton, NPCX-I2C port pads node
 
 compatible: "nuvoton,npcx-i2c-port"
 
-include: [base.yaml]
+include: [i2c-controller.yaml, pinctrl-device.yaml]
 
 properties:
-    label:
-        required: true
-
     port:
         type: int
         required: true
@@ -22,11 +19,10 @@ properties:
         description: i2c controller to handle signals from port pads
 
     pinctrl-0:
-        type: phandles
         required: true
-        description: configurations of pinmux controllers
+
+    pinctrl-names:
+        required: true
 
     clock-frequency:
-        type: int
-        required: false
-        description: Initial clock frequency in Hz
+        required: true

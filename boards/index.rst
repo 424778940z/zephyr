@@ -15,7 +15,9 @@ under :zephyr_file:`doc/templates/board.tmpl`
 
    x86/index.rst
    arm/index.rst
+   arm64/index.rst
    arc/index.rst
+   mips/index.rst
    nios2/index.rst
    xtensa/index.rst
    posix/index.rst

@@ -6,11 +6,12 @@
 
 /dts-v1/;
 
-#include <gr716a.dtsi>
+#include <gaisler/gr716a.dtsi>
 
 / {
 	chosen {
 		zephyr,console = &uart0;
+		zephyr,shell-uart = &uart0;
 		zephyr,sram = &dram;
 	};
 };

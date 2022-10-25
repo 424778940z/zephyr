@@ -5,8 +5,8 @@ arch: arm
 toolchain:
   - zephyr
 supported:
+  - arduino_serial
   - clock_controller
-  - pinmux
   - gpio
   - i2c
   - serial

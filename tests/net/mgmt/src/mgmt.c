@@ -4,19 +4,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(net_test, CONFIG_NET_MGMT_EVENT_LOG_LEVEL);
 
-#include <zephyr.h>
-#include <tc_util.h>
+#include <zephyr/kernel.h>
+#include <zephyr/tc_util.h>
 #include <errno.h>
-#include <toolchain.h>
-#include <linker/sections.h>
+#include <zephyr/toolchain.h>
+#include <zephyr/linker/sections.h>
 
-#include <net/dummy.h>
-#include <net/net_mgmt.h>
-#include <net/net_pkt.h>
-#include <ztest.h>
+#include <zephyr/net/dummy.h>
+#include <zephyr/net/net_mgmt.h>
+#include <zephyr/net/net_pkt.h>
+#include <zephyr/ztest.h>
 
 #define THREAD_SLEEP 50 /* ms */
 #define TEST_INFO_STRING "mgmt event info"
@@ -32,7 +32,7 @@ static uint32_t event2throw;
 static uint32_t throw_times;
 static uint32_t throw_sleep;
 static bool with_info;
-static K_THREAD_STACK_DEFINE(thrower_stack, 512 + CONFIG_TEST_EXTRA_STACKSIZE);
+static K_THREAD_STACK_DEFINE(thrower_stack, 512 + CONFIG_TEST_EXTRA_STACK_SIZE);
 static struct k_thread thrower_thread_data;
 static struct k_sem thrower_lock;
 
@@ -91,7 +91,7 @@ static struct dummy_api fake_iface_api = {
 };
 
 NET_DEVICE_INIT(net_event_test, "net_event_test",
-		fake_dev_init, device_pm_control_nop,
+		fake_dev_init, NULL,
 		NULL, NULL, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT,
 		&fake_iface_api, DUMMY_L2, NET_L2_GET_CTX_TYPE(DUMMY_L2), 127);
 
@@ -118,12 +118,15 @@ static void thrower_thread(void)
 
 			if (with_info) {
 				net_mgmt_event_notify_with_info(
-					event2throw, net_if_get_default(),
+					event2throw,
+					net_if_get_first_by_type(
+						      &NET_L2_GET_NAME(DUMMY)),
 					info_data,
 					TEST_MGMT_EVENT_INFO_SIZE);
 			} else {
 				net_mgmt_event_notify(event2throw,
-						      net_if_get_default());
+					net_if_get_first_by_type(
+						&NET_L2_GET_NAME(DUMMY)));
 			}
 
 		}
@@ -211,9 +214,10 @@ static int test_synchronous_event_listener(uint32_t times, bool on_iface)
 	k_sem_give(&thrower_lock);
 
 	if (on_iface) {
-		ret = net_mgmt_event_wait_on_iface(net_if_get_default(),
-						   event_mask, NULL, NULL,
-						   NULL, K_SECONDS(1));
+		ret = net_mgmt_event_wait_on_iface(
+			net_if_get_first_by_type(&NET_L2_GET_NAME(DUMMY)),
+			event_mask, NULL, NULL,
+			NULL, K_SECONDS(1));
 	} else {
 		ret = net_mgmt_event_wait(event_mask, NULL, NULL, NULL, NULL,
 					  K_SECONDS(1));
@@ -285,8 +289,9 @@ static int test_core_event(uint32_t event, bool (*func)(void))
 
 static bool _iface_ip6_add(void)
 {
-	if (net_if_ipv6_addr_add(net_if_get_default(),
-				 &addr6, NET_ADDR_MANUAL, 0)) {
+	if (net_if_ipv6_addr_add(
+		    net_if_get_first_by_type(&NET_L2_GET_NAME(DUMMY)),
+		    &addr6, NET_ADDR_MANUAL, 0)) {
 		return true;
 	}
 
@@ -295,14 +300,16 @@ static bool _iface_ip6_add(void)
 
 static bool _iface_ip6_del(void)
 {
-	if (net_if_ipv6_addr_rm(net_if_get_default(), &addr6)) {
+	if (net_if_ipv6_addr_rm(
+		    net_if_get_first_by_type(&NET_L2_GET_NAME(DUMMY)),
+		    &addr6)) {
 		return true;
 	}
 
 	return false;
 }
 
-void test_mgmt(void)
+ZTEST(mgmt_fn_test_suite, test_mgmt)
 {
 	TC_PRINT("Starting Network Management API test\n");
 
@@ -347,8 +354,4 @@ void test_mgmt(void)
 		      "test_synchronous_event_listener failed");
 }
 
-void test_main(void)
-{
-	ztest_test_suite(test_mgmt_fn, ztest_unit_test(test_mgmt));
-	ztest_run_test_suite(test_mgmt_fn);
-}
+ZTEST_SUITE(mgmt_fn_test_suite, NULL, NULL, NULL, NULL, NULL);

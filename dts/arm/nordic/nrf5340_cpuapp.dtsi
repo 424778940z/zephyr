@@ -12,12 +12,18 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 
-		cpu@0 {
+		cpu0: cpu@0 {
 			device_type = "cpu";
 			compatible = "arm,cortex-m33f";
 			reg = <0>;
 			#address-cells = <1>;
 			#size-cells = <1>;
+
+			itm: itm@e0000000 {
+				compatible = "arm,armv8m-itm";
+				reg = <0xe0000000 0x1000>;
+				swo-ref-frequency = <64000000>;
+			};
 
 			mpu: mpu@e000ed90 {
 				compatible = "arm,armv8m-mpu";
@@ -27,15 +33,24 @@
 	};
 
 	chosen {
+		zephyr,entropy = &rng_hci;
 		zephyr,flash-controller = &flash_controller;
 	};
 
 	soc {
-		sram0: memory@20000000 {
-			compatible = "mmio-sram";
+		ficr: ficr@ff0000 {
+			compatible = "nordic,nrf-ficr";
+			reg = <0xff0000 0x1000>;
+			status = "okay";
 		};
 
-		sram1: memory@21000000 {
+		uicr: uicr@ff8000 {
+			compatible = "nordic,nrf-uicr";
+			reg = <0xff8000 0x1000>;
+			status = "okay";
+		};
+
+		sram0: memory@20000000 {
 			compatible = "mmio-sram";
 		};
 
@@ -51,28 +66,6 @@
 		};
 
 		/* Additional Secure peripherals */
-		cryptocell: crypto@50844000 {
-			compatible = "nordic,nrf-cc312";
-			reg = <0x50844000 0x1000>;
-			label = "CRYPTOCELL";
-			status = "okay";
-			#address-cells = <1>;
-			#size-cells = <1>;
-			cryptocell312: crypto@50845000 {
-				compatible = "arm,cryptocell-312";
-				reg = <0x50845000 0x1000>;
-				interrupts = <68 NRF_DEFAULT_IRQ_PRIORITY>;
-				label = "CRYPTOCELL312";
-			};
-		};
-
-		gpiote: gpiote@5000d000 {
-			compatible = "nordic,nrf-gpiote";
-			reg = <0x5000d000 0x1000>;
-			interrupts = <13 5>;
-			status = "disabled";
-			label = "GPIOTE_0";
-		};
 
 		spu: spu@50003000 {
 			compatible = "nordic,nrf-spu";
@@ -81,20 +74,45 @@
 			status = "okay";
 		};
 
-		ficr: ficr@ff0000 {
-			compatible = "nordic,nrf-ficr";
-			reg = <0xff0000 0x1000>;
-			status = "okay";
+		/*
+		 * GPIOTE0 is always accessible as a secure peripheral,
+		 * so we give it the 'gpiote' label for use when building
+		 * code for this target.
+		 */
+		gpiote: gpiote0: gpiote@5000d000 {
+			compatible = "nordic,nrf-gpiote";
+			reg = <0x5000d000 0x1000>;
+			interrupts = <13 5>;
+			status = "disabled";
 		};
 
-		uicr: uicr@ff8000 {
-			compatible = "nordic,nrf-uicr";
-			reg = <0xff8000 0x1000>;
+		cryptocell: crypto@50844000 {
+			compatible = "nordic,nrf-cc312";
+			reg = <0x50844000 0x1000>;
 			status = "okay";
+			#address-cells = <1>;
+			#size-cells = <1>;
+			cryptocell312: crypto@50845000 {
+				compatible = "arm,cryptocell-312";
+				reg = <0x50845000 0x1000>;
+				interrupts = <68 NRF_DEFAULT_IRQ_PRIORITY>;
+			};
 		};
+	};
+
+	/* Default IPC description */
+	ipc {
+		#include "nrf5340_cpuapp_ipc.dtsi"
 	};
 };
 
 &nvic {
 	arm,num-irq-priority-bits = <3>;
 };
+
+/*
+ * Include the non-secure peripherals file here since
+ * it expects to be at the root level. This provides
+ * a node for GPIOTE1.
+ */
+#include "nrf5340_cpuapp_peripherals_ns.dtsi"

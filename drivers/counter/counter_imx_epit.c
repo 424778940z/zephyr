@@ -5,8 +5,9 @@
  */
 #define DT_DRV_COMPAT nxp_imx_epit
 
-#include <drivers/counter.h>
-#include <device.h>
+#include <zephyr/drivers/counter.h>
+#include <zephyr/device.h>
+#include <zephyr/irq.h>
 #include "clock_freq.h"
 #include "epit.h"
 
@@ -134,11 +135,6 @@ static uint32_t imx_epit_get_top_value(const struct device *dev)
 	return EPIT_GetCounterLoadValue(base);
 }
 
-static uint32_t imx_epit_get_max_relative_alarm(const struct device *dev)
-{
-	return COUNTER_MAX_RELOAD;
-}
-
 static const struct counter_driver_api imx_epit_driver_api = {
 	.start = imx_epit_start,
 	.stop = imx_epit_stop,
@@ -146,7 +142,6 @@ static const struct counter_driver_api imx_epit_driver_api = {
 	.set_top_value = imx_epit_set_top_value,
 	.get_pending_int = imx_epit_get_pending_int,
 	.get_top_value = imx_epit_get_top_value,
-	.get_max_relative_alarm = imx_epit_get_max_relative_alarm,
 };
 
 #define COUNTER_IMX_EPIT_DEVICE(idx)					       \
@@ -164,9 +159,9 @@ static const struct imx_epit_config imx_epit_##idx##z_config = {	       \
 static struct imx_epit_data imx_epit_##idx##_data;			       \
 DEVICE_DT_INST_DEFINE(idx,						       \
 		    &imx_epit_config_func_##idx,			       \
-		    device_pm_control_nop,				       \
+		    NULL,						       \
 		    &imx_epit_##idx##_data, &imx_epit_##idx##z_config.info,    \
-		    PRE_KERNEL_1, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT,	       \
+		    PRE_KERNEL_1, CONFIG_COUNTER_INIT_PRIORITY,		       \
 		    &imx_epit_driver_api);				       \
 static int imx_epit_config_func_##idx(const struct device *dev)		       \
 {									       \

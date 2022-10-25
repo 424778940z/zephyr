@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2020 Intel Corporation.
+ * Copyright (c) 2020 Nordic Semiconductor ASA
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -78,6 +79,35 @@ static struct fs_file_t err_filep;
 static const char test_str[] = "hello world!";
 
 /**
+ * @brief Test fs_file_t_init initializer
+ */
+ZTEST(fs_api_dir_file, test_fs_file_t_init)
+{
+	struct fs_file_t fst;
+
+	memset(&fst, 0xff, sizeof(fst));
+
+	fs_file_t_init(&fst);
+	zassert_equal(fst.mp, NULL, "Expected to be initialized to NULL");
+	zassert_equal(fst.filep, NULL, "Expected to be initialized to NULL");
+	zassert_equal(fst.flags, 0, "Expected to be initialized to 0");
+}
+
+/**
+ * @brief Test fs_dir_t_init initializer
+ */
+ZTEST(fs_api_dir_file, test_fs_dir_t_init)
+{
+	struct fs_dir_t dirp;
+
+	memset(&dirp, 0xff, sizeof(dirp));
+
+	fs_dir_t_init(&dirp);
+	zassert_equal(dirp.mp, NULL, "Expected to be initialized to NULL");
+	zassert_equal(dirp.dirp, NULL, "Expected to be initialized to NULL");
+}
+
+/**
  * @brief Test mount interface of filesystem
  *
  * @details
@@ -119,13 +149,14 @@ void test_mount(void)
 	zassert_not_equal(ret, 0, "Mount to a mounted dir");
 
 	fs_unregister(TEST_FS_2, &temp_fs);
+	memset(&null_fs, 0, sizeof(null_fs));
 	fs_register(TEST_FS_2, &null_fs);
 
 	TC_PRINT("Mount a file system has no interface implemented\n");
 	ret = fs_mount(&test_fs_mnt_no_op);
 	zassert_not_equal(ret, 0, "Mount to a fs without op interface");
 
-	/* mount an file system has no unmmount functionality */
+	/* mount an file system has no unmount functionality */
 	null_fs.mount = temp_fs.mount;
 	ret = fs_mount(&test_fs_mnt_no_op);
 	zassert_equal(ret, 0, "fs has no unmount functionality can be mounted");
@@ -160,7 +191,11 @@ void test_unmount(void)
 
 	TC_PRINT("unmount a file system has no unmount functionality\n");
 	ret = fs_unmount(&test_fs_mnt_no_op);
-	zassert_not_equal(ret, 0, "Unmount a fs has no unmount fuctionality");
+	zassert_not_equal(ret, 0, "Unmount a fs has no unmount functionality");
+	/* assign a unmount interface to null_fs to unmount it */
+	null_fs.unmount = temp_fs.unmount;
+	ret = fs_unmount(&test_fs_mnt_no_op);
+	zassert_equal(ret, 0, "file system should be unmounted");
 	/* TEST_FS_2 is registered in test_mount(), unregister it here */
 	fs_unregister(TEST_FS_2, &null_fs);
 }
@@ -170,7 +205,7 @@ void test_unmount(void)
  *
  * @ingroup filesystem_api
  */
-void test_file_statvfs(void)
+ZTEST(fs_api_dir_file, test_file_statvfs)
 {
 	struct fs_statvfs stat;
 	int ret;
@@ -189,12 +224,12 @@ void test_file_statvfs(void)
 	ret = fs_statvfs("/SDCARD:", &stat);
 	zassert_not_equal(ret, 0, "Get volume info by no-exist path");
 
-	/* It's ok if there is no stat interface */
+	/* System with no statvfs interface */
 	ret = fs_statvfs(NOOP_MNTP, &stat);
-	zassert_equal(ret, 0, "fs has no statvfs functionality");
+	zassert_equal(ret, -ENOTSUP, "fs has no statvfs functionality");
 
 	ret = fs_statvfs(TEST_FS_MNTP, &stat);
-	zassert_equal(ret, 0, "Error getting voluem stats");
+	zassert_equal(ret, 0, "Error getting volume stats");
 	TC_PRINT("\n");
 	TC_PRINT("Optimal transfer block size   = %lu\n", stat.f_bsize);
 	TC_PRINT("Allocation unit size          = %lu\n", stat.f_frsize);
@@ -226,7 +261,7 @@ void test_mkdir(void)
 	zassert_not_equal(ret, 0, "Create dir in no fs mounted dir");
 
 	ret = fs_mkdir(TEST_FS_MNTP);
-	zassert_not_equal(ret, 0, "Shoult not create root dir");
+	zassert_not_equal(ret, 0, "Should not create root dir");
 
 	ret = fs_mkdir(NOOP_MNTP"/testdir");
 	zassert_not_equal(ret, 0, "Filesystem has no mkdir interface");
@@ -243,11 +278,14 @@ void test_mkdir(void)
 void test_opendir(void)
 {
 	int ret;
-	struct fs_dir_t dirp;
+	struct fs_dir_t dirp, dirp2, dirp3;
 
 	TC_PRINT("\nopendir tests:\n");
 
-	memset(&dirp, 0, sizeof(dirp));
+	fs_dir_t_init(&dirp);
+	fs_dir_t_init(&dirp2);
+	fs_dir_t_init(&dirp3);
+
 	TC_PRINT("Test null path\n");
 	ret = fs_opendir(NULL, NULL);
 	zassert_not_equal(ret, 0, "Open dir with NULL pointer parameter");
@@ -272,12 +310,22 @@ void test_opendir(void)
 	ret = fs_opendir(&dirp, "/");
 	zassert_equal(ret, 0, "Fail to open root dir");
 
-	ret = fs_opendir(&dirp, TEST_DIR);
+	TC_PRINT("Double-open using occupied fs_dir_t object\n");
+	ret = fs_opendir(&dirp, "/not_a_dir");
+	zassert_equal(ret, -EBUSY, "Expected -EBUSY, got %d", ret);
+
+	ret = fs_opendir(&dirp2, TEST_DIR);
 	zassert_equal(ret, 0, "Fail to open dir");
 
-	TC_PRINT("Open same directory multi times\n");
-	ret = fs_opendir(&dirp, TEST_DIR);
-	zassert_not_equal(ret, 0, "Can't reopen an opened dir");
+	TC_PRINT("Double-open using occupied fs_dir_t object\n");
+	ret = fs_opendir(&dirp2, "/xD");
+	zassert_equal(ret, -EBUSY, "Expected -EBUSY, got %d", ret);
+
+	mock_opendir_result(-EIO);
+	TC_PRINT("Transfer underlying FS error\n");
+	ret = fs_opendir(&dirp3, TEST_DIR);
+	mock_opendir_result(0);
+	zassert_equal(ret, -EIO, "FS error not transferred\n");
 }
 
 /**
@@ -291,7 +339,7 @@ void test_closedir(void)
 	struct fs_dir_t dirp;
 
 	TC_PRINT("\nclosedir tests: %s\n", TEST_DIR);
-	memset(&dirp, 0, sizeof(dirp));
+	fs_dir_t_init(&dirp);
 	ret = fs_opendir(&dirp, TEST_DIR);
 	zassert_equal(ret, 0, "Fail to open dir");
 
@@ -307,6 +355,38 @@ void test_closedir(void)
 	zassert_not_equal(ret, 0, "Filesystem has no closedir interface");
 }
 
+/**
+ * @brief Test Reuse fs_dir_t object from closed directory"
+ *
+ * @ingroup filesystem_api
+ */
+void test_opendir_closedir(void)
+{
+	int ret;
+	struct fs_dir_t dirp;
+
+	TC_PRINT("\nreuse fs_dir_t tests:\n");
+
+	fs_dir_t_init(&dirp);
+
+	TC_PRINT("Test: open root dir, close, open volume dir\n");
+	ret = fs_opendir(&dirp, "/");
+	zassert_equal(ret, 0, "Fail to open root dir");
+
+	ret = fs_closedir(&dirp);
+	zassert_equal(ret, 0, "Fail to close dir");
+
+	ret = fs_opendir(&dirp, TEST_DIR);
+	zassert_equal(ret, 0, "Fail to open dir");
+
+	TC_PRINT("Test: open volume dir, close, open root dir\n");
+	ret = fs_closedir(&dirp);
+	zassert_equal(ret, 0, "Fail to close dir");
+
+	ret = fs_opendir(&dirp, "/");
+	zassert_equal(ret, 0, "Fail to open root dir");
+}
+
 static int _test_lsdir(const char *path)
 {
 	int ret;
@@ -315,7 +395,7 @@ static int _test_lsdir(const char *path)
 
 	TC_PRINT("\nlsdir tests:\n");
 
-	memset(&dirp, 0, sizeof(dirp));
+	fs_dir_t_init(&dirp);
 	memset(&entry, 0, sizeof(entry));
 
 	TC_PRINT("read an unopened dir\n");
@@ -338,6 +418,7 @@ static int _test_lsdir(const char *path)
 	}
 
 	TC_PRINT("read an opened dir\n");
+	fs_dir_t_init(&dirp);
 	ret = fs_opendir(&dirp, path);
 	if (ret) {
 		if (path) {
@@ -379,10 +460,10 @@ static int _test_lsdir(const char *path)
  */
 void test_lsdir(void)
 {
-	zassert_true(_test_lsdir(NULL) == TC_FAIL, NULL);
-	zassert_true(_test_lsdir("/") == TC_PASS, NULL);
-	zassert_true(_test_lsdir("/test") == TC_FAIL, NULL);
-	zassert_true(_test_lsdir(TEST_DIR) == TC_PASS, NULL);
+	zassert_true(_test_lsdir(NULL) == TC_FAIL);
+	zassert_true(_test_lsdir("/") == TC_PASS);
+	zassert_true(_test_lsdir("/test") == TC_FAIL);
+	zassert_true(_test_lsdir(TEST_DIR) == TC_PASS);
 }
 
 /**
@@ -395,6 +476,7 @@ void test_file_open(void)
 	int ret;
 
 	TC_PRINT("\nOpen tests:\n");
+	fs_file_t_init(&filep);
 
 	TC_PRINT("\nOpen a file without a path\n");
 	ret = fs_open(&filep, NULL, FS_O_READ);
@@ -419,9 +501,13 @@ void test_file_open(void)
 	ret = fs_open(&filep, TEST_FILE, FS_O_READ);
 	zassert_equal(ret, 0, "Fail to open file");
 
+	TC_PRINT("\nDouble-open\n");
+	ret = fs_open(&filep, TEST_FILE, FS_O_READ);
+	zassert_equal(ret, -EBUSY, "Expected -EBUSY, got %d", ret);
+
 	TC_PRINT("\nReopen the same file");
 	ret = fs_open(&filep, TEST_FILE, FS_O_READ);
-	zassert_not_equal(ret, 0, "Reopen an opend file");
+	zassert_not_equal(ret, 0, "Reopen an opened file");
 
 	TC_PRINT("Opened file %s\n", TEST_FILE);
 }
@@ -434,7 +520,7 @@ static int _test_file_write(void)
 	TC_PRINT("\nWrite tests:\n");
 
 	TC_PRINT("Write to an unopened file\n");
-	err_filep.mp = NULL;
+	fs_file_t_init(&err_filep);
 	brw = fs_write(&err_filep, (char *)test_str, strlen(test_str));
 	if (brw >= 0) {
 		return TC_FAIL;
@@ -488,7 +574,7 @@ static int _test_file_write(void)
  */
 void test_file_write(void)
 {
-	zassert_true(_test_file_write() == TC_PASS, NULL);
+	zassert_true(_test_file_write() == TC_PASS);
 }
 
 static int _test_file_sync(void)
@@ -499,7 +585,7 @@ static int _test_file_sync(void)
 	TC_PRINT("\nSync tests:\n");
 
 	TC_PRINT("sync an unopened file\n");
-	err_filep.mp = NULL;
+	fs_file_t_init(&err_filep);
 	ret = fs_sync(&err_filep);
 	if (!ret) {
 		return TC_FAIL;
@@ -512,6 +598,7 @@ static int _test_file_sync(void)
 		return TC_FAIL;
 	}
 
+	fs_file_t_init(&filep);
 	ret = fs_open(&filep, TEST_FILE, FS_O_RDWR);
 
 	for (;;) {
@@ -558,9 +645,9 @@ static int _test_file_sync(void)
  *
  * @ingroup filesystem_api
  */
-void test_file_sync(void)
+ZTEST(fs_api_dir_file, test_file_sync)
 {
-	zassert_true(_test_file_sync() == TC_PASS, NULL);
+	zassert_true(_test_file_sync() == TC_PASS);
 }
 
 /**
@@ -577,7 +664,7 @@ void test_file_read(void)
 	TC_PRINT("\nRead tests:\n");
 
 	TC_PRINT("Read an unopened file\n");
-	err_filep.mp = NULL;
+	fs_file_t_init(&err_filep);
 	brw = fs_read(&err_filep, read_buff, sz);
 	zassert_false(brw >= 0, "Can't read an unopened file");
 
@@ -602,6 +689,30 @@ void test_file_read(void)
 	TC_PRINT("Data read matches data written\n");
 }
 
+/**
+ * @brief fs_seek tests for expected ENOTSUP
+ *
+ * @ingroup filesystem_api
+ */
+void test_file_seek(void)
+{
+	struct fs_file_system_t backup = temp_fs;
+
+	/* Simulate tell and lseek not implemented */
+	temp_fs.lseek = NULL;
+	temp_fs.tell = NULL;
+
+	zassert_equal(fs_seek(&filep, 0, FS_SEEK_CUR),
+		      -ENOTSUP,
+		      "fs_seek not expected to be implemented");
+	zassert_equal(fs_tell(&filep),
+		      -ENOTSUP,
+		      "fs_tell not expected to be implemented");
+
+	/* Restore fs API interface */
+	temp_fs = backup;
+}
+
 static int _test_file_truncate(void)
 {
 	int ret;
@@ -612,7 +723,7 @@ static int _test_file_truncate(void)
 	TC_PRINT("\nTruncate tests: max file size is 128byte\n");
 
 	TC_PRINT("\nTruncate, seek, tell an unopened file\n");
-	err_filep.mp = NULL;
+	fs_file_t_init(&err_filep);
 	ret = fs_truncate(&err_filep, 256);
 	if (!ret) {
 		return TC_FAIL;
@@ -758,7 +869,7 @@ static int _test_file_truncate(void)
  */
 void test_file_truncate(void)
 {
-	zassert_true(_test_file_truncate() == TC_PASS, NULL);
+	zassert_true(_test_file_truncate() == TC_PASS);
 }
 
 /**
@@ -773,7 +884,7 @@ void test_file_close(void)
 	TC_PRINT("\nClose tests:\n");
 
 	TC_PRINT("Close an unopened file\n");
-	err_filep.mp = NULL;
+	fs_file_t_init(&err_filep);
 	ret = fs_close(&err_filep);
 	zassert_equal(ret, 0, "Should close an unopened file");
 
@@ -784,6 +895,12 @@ void test_file_close(void)
 
 	ret = fs_close(&filep);
 	zassert_equal(ret, 0, "Fail to close file");
+
+	TC_PRINT("Reuse fs_file_t from closed file");
+	ret = fs_open(&filep, TEST_FILE, FS_O_READ);
+	zassert_equal(ret, 0, "Expected open to succeed, got %d", ret);
+	ret = fs_close(&filep);
+	zassert_equal(ret, 0, "Expected close to succeed, got %d", ret);
 
 	TC_PRINT("\nClose a closed file:\n");
 	filep.mp = &test_fs_mnt_1;
@@ -798,7 +915,7 @@ void test_file_close(void)
  *
  * @ingroup filesystem_api
  */
-void test_file_rename(void)
+ZTEST(fs_api_dir_file, test_file_rename)
 {
 	int ret = TC_FAIL;
 
@@ -843,7 +960,7 @@ void test_file_rename(void)
  *
  * @ingroup filesystem_api
  */
-void test_file_stat(void)
+ZTEST(fs_api_dir_file, test_file_stat)
 {
 	int ret;
 	struct fs_dirent entry;
@@ -880,7 +997,7 @@ void test_file_stat(void)
  *
  * @ingroup filesystem_api
  */
-void test_file_unlink(void)
+ZTEST(fs_api_dir_file, test_file_unlink)
 {
 	int ret;
 
@@ -919,3 +1036,53 @@ void test_file_unlink(void)
 
 	TC_PRINT("File (%s) deleted successfully!\n", TEST_FILE_RN);
 }
+
+static void *fs_api_setup(void)
+{
+	fs_register(TEST_FS_1, &temp_fs);
+	fs_mount(&test_fs_mnt_1);
+	memset(&null_fs, 0, sizeof(null_fs));
+	null_fs.mount = temp_fs.mount;
+	null_fs.unmount = temp_fs.unmount;
+	fs_register(TEST_FS_2, &null_fs);
+	fs_mount(&test_fs_mnt_no_op);
+	return NULL;
+}
+
+static void fs_api_teardown(void *fixtrue)
+{
+	fs_unmount(&test_fs_mnt_no_op);
+	fs_unregister(TEST_FS_2, &null_fs);
+	fs_unmount(&test_fs_mnt_1);
+	fs_unregister(TEST_FS_1, &temp_fs);
+}
+
+ZTEST(fs_api_dir_file, test_fs_dir)
+{
+	test_mkdir();
+	test_opendir();
+	test_closedir();
+	test_opendir_closedir();
+	test_lsdir();
+}
+
+ZTEST(fs_api_dir_file, test_file_ops)
+{
+	test_file_open();
+	test_file_write();
+	test_file_read();
+	test_file_seek();
+	test_file_truncate();
+	test_file_close();
+}
+
+ZTEST(fs_api_register_mount, test_mount_unmount)
+{
+	fs_register(TEST_FS_1, &temp_fs);
+	test_mount();
+	test_unmount();
+	fs_unregister(TEST_FS_1, &temp_fs);
+}
+
+ZTEST_SUITE(fs_api_register_mount, NULL, NULL, NULL, NULL, NULL);
+ZTEST_SUITE(fs_api_dir_file, NULL, fs_api_setup, NULL, NULL, fs_api_teardown);

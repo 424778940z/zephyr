@@ -92,7 +92,12 @@ static void uart_fifo_callback(const struct device *dev, void *user_data)
 
 static int test_fifo_read(void)
 {
-	const struct device *uart_dev = device_get_binding(UART_DEVICE_NAME);
+	const struct device *const uart_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
+
+	if (!device_is_ready(uart_dev)) {
+		TC_PRINT("UART device not ready\n");
+		return TC_FAIL;
+	}
 
 	/* Verify uart_irq_callback_set() */
 	uart_irq_callback_set(uart_dev, uart_fifo_callback);
@@ -105,6 +110,8 @@ static int test_fifo_read(void)
 
 	data_received = false;
 	while (data_received == false) {
+		/* Allow other thread/workqueue to work. */
+		k_yield();
 	}
 
 	/* Verify uart_irq_rx_disable() */
@@ -115,7 +122,12 @@ static int test_fifo_read(void)
 
 static int test_fifo_fill(void)
 {
-	const struct device *uart_dev = device_get_binding(UART_DEVICE_NAME);
+	const struct device *const uart_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
+
+	if (!device_is_ready(uart_dev)) {
+		TC_PRINT("UART device not ready\n");
+		return TC_FAIL;
+	}
 
 	char_sent = 0;
 
@@ -143,12 +155,26 @@ static int test_fifo_fill(void)
 
 }
 
+#if CONFIG_SHELL
 void test_uart_fifo_fill(void)
+#else
+ZTEST(uart_basic_api, test_uart_fifo_fill)
+#endif
 {
-	zassert_true(test_fifo_fill() == TC_PASS, NULL);
+#ifndef CONFIG_UART_INTERRUPT_DRIVEN
+	ztest_test_skip();
+#endif
+	zassert_true(test_fifo_fill() == TC_PASS);
 }
 
+#if CONFIG_SHELL
 void test_uart_fifo_read(void)
+#else
+ZTEST(uart_basic_api, test_uart_fifo_read)
+#endif
 {
-	zassert_true(test_fifo_read() == TC_PASS, NULL);
+#ifndef CONFIG_UART_INTERRUPT_DRIVEN
+	ztest_test_skip();
+#endif
+	zassert_true(test_fifo_read() == TC_PASS);
 }

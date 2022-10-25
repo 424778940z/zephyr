@@ -10,5 +10,4 @@ on-bus: i2c
 properties:
     reg:
       required: true
-    label:
-      required: true
+      description: device address on i2c bus

@@ -17,7 +17,9 @@
 #include <unistd.h>
 #include <poll.h>
 
-#include <drivers/uart.h>
+#include <zephyr/drivers/uart.h>
+#include <zephyr/kernel.h>
+
 #include "cmdline.h" /* native_posix command line options header */
 #include "soc.h"
 
@@ -129,19 +131,19 @@ static int open_tty(struct native_uart_status *driver_data,
 		err_nbr = errno;
 		close(master_pty);
 		ERROR("Could not grant access to the slave PTY side (%i)\n",
-			errno);
+			err_nbr);
 	}
 	ret = unlockpt(master_pty);
 	if (ret == -1) {
 		err_nbr = errno;
 		close(master_pty);
-		ERROR("Could not unlock the slave PTY side (%i)\n", errno);
+		ERROR("Could not unlock the slave PTY side (%i)\n", err_nbr);
 	}
 	slave_pty_name = ptsname(master_pty);
 	if (slave_pty_name == NULL) {
 		err_nbr = errno;
 		close(master_pty);
-		ERROR("Error getting slave PTY device name (%i)\n", errno);
+		ERROR("Error getting slave PTY device name (%i)\n", err_nbr);
 	}
 	/* Set the master PTY as non blocking */
 	flags = fcntl(master_pty, F_GETFL);
@@ -149,7 +151,7 @@ static int open_tty(struct native_uart_status *driver_data,
 		err_nbr = errno;
 		close(master_pty);
 		ERROR("Could not read the master PTY file status flags (%i)\n",
-			errno);
+			err_nbr);
 	}
 
 	ret = fcntl(master_pty, F_SETFL, flags | O_NONBLOCK);
@@ -157,8 +159,10 @@ static int open_tty(struct native_uart_status *driver_data,
 		err_nbr = errno;
 		close(master_pty);
 		ERROR("Could not set the master PTY as non-blocking (%i)\n",
-			errno);
+			err_nbr);
 	}
+
+	(void) err_nbr;
 
 	/*
 	 * Set terminal in "raw" mode:
@@ -216,8 +220,7 @@ static int np_uart_0_init(const struct device *dev)
 	d = (struct native_uart_status *)dev->data;
 
 	if (IS_ENABLED(CONFIG_NATIVE_UART_0_ON_OWN_PTY)) {
-		int tty_fn = open_tty(d, DT_INST_LABEL(0),
-				      auto_attach);
+		int tty_fn = open_tty(d, dev->name, auto_attach);
 
 		d->in_fd = tty_fn;
 		d->out_fd = tty_fn;
@@ -253,7 +256,7 @@ static int np_uart_1_init(const struct device *dev)
 
 	d = (struct native_uart_status *)dev->data;
 
-	tty_fn = open_tty(d, CONFIG_UART_NATIVE_POSIX_PORT_1_NAME, false);
+	tty_fn = open_tty(d, dev->name, false);
 
 	d->in_fd = tty_fn;
 	d->out_fd = tty_fn;
@@ -291,6 +294,7 @@ static void np_uart_poll_out(const struct device *dev,
 	 * but we do not need the return value for anything.
 	 */
 	ret = write(d->out_fd, &out_char, 1);
+	(void) ret;
 }
 
 /**
@@ -310,7 +314,7 @@ static int np_uart_stdin_poll_in(const struct device *dev,
 	if (disconnected || feof(stdin)) {
 		/*
 		 * The stdinput is fed from a file which finished or the user
-		 * pressed Crtl+D
+		 * pressed Ctrl+D
 		 */
 		disconnected = true;
 		return -1;
@@ -335,7 +339,7 @@ static int np_uart_stdin_poll_in(const struct device *dev,
 	}
 
 	n = read(in_f, p_char, 1);
-	if (n == -1) {
+	if ((n == -1) || (n == 0)) {
 		return -1;
 	}
 
@@ -365,19 +369,26 @@ static int np_uart_tty_poll_in(const struct device *dev,
 }
 
 DEVICE_DT_INST_DEFINE(0,
-	    &np_uart_0_init, device_pm_control_nop,
+	    &np_uart_0_init, NULL,
 	    (void *)&native_uart_status_0, NULL,
-	    PRE_KERNEL_1, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,
+	    PRE_KERNEL_1, CONFIG_SERIAL_INIT_PRIORITY,
 	    &np_uart_driver_api_0);
 
 #if defined(CONFIG_UART_NATIVE_POSIX_PORT_1_ENABLE)
-DEVICE_DEFINE(uart_native_posix1,
-	    CONFIG_UART_NATIVE_POSIX_PORT_1_NAME, &np_uart_1_init,
-	    device_pm_control_nop,
+DEVICE_DT_INST_DEFINE(1,
+	    &np_uart_1_init, NULL,
 	    (void *)&native_uart_status_1, NULL,
-	    PRE_KERNEL_1, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,
+	    PRE_KERNEL_1, CONFIG_SERIAL_INIT_PRIORITY,
 	    &np_uart_driver_api_1);
 #endif /* CONFIG_UART_NATIVE_POSIX_PORT_1_ENABLE */
+
+static void auto_attach_cmd_cb(char *argv, int offset)
+{
+	ARG_UNUSED(argv);
+	ARG_UNUSED(offset);
+
+	auto_attach = true;
+}
 
 static void np_add_uart_options(void)
 {
@@ -399,8 +410,9 @@ static void np_add_uart_options(void)
 		"Automatically attach to the UART terminal"},
 		{false, false, false,
 		"attach_uart_cmd", "\"cmd\"", 's',
-		(void *)&auto_attach_cmd, NULL,
-		"Command used to automatically attach to the terminal, by "
+		(void *)&auto_attach_cmd, auto_attach_cmd_cb,
+		"Command used to automatically attach to the terminal"
+		"(implies auto_attach), by "
 		"default: '" CONFIG_NATIVE_UART_AUTOATTACH_DEFAULT_CMD "'"},
 		IF_ENABLED(CONFIG_UART_NATIVE_WAIT_PTS_READY_ENABLE, (
 			{false, false, true,

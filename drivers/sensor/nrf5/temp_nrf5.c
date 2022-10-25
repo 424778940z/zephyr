@@ -7,12 +7,13 @@
 
 #define DT_DRV_COMPAT nordic_nrf_temp
 
-#include <device.h>
-#include <drivers/sensor.h>
-#include <drivers/clock_control.h>
-#include <drivers/clock_control/nrf_clock_control.h>
-#include <logging/log.h>
+#include <zephyr/device.h>
+#include <zephyr/drivers/sensor.h>
+#include <zephyr/drivers/clock_control.h>
+#include <zephyr/drivers/clock_control/nrf_clock_control.h>
+#include <zephyr/logging/log.h>
 #include <hal/nrf_temp.h>
+#include <zephyr/irq.h>
 
 LOG_MODULE_REGISTER(temp_nrf5, CONFIG_SENSOR_LOG_LEVEL);
 
@@ -108,20 +109,16 @@ static const struct sensor_driver_api temp_nrf5_driver_api = {
 	.channel_get = temp_nrf5_channel_get,
 };
 
-DEVICE_DT_INST_DECLARE(0);
-
 static int temp_nrf5_init(const struct device *dev)
 {
 	struct temp_nrf5_data *data = dev->data;
-
-	LOG_DBG("");
 
 	/* A null clk_mgr indicates sensor has not been initialized */
 	data->clk_mgr =
 		z_nrf_clock_control_get_onoff(CLOCK_CONTROL_NRF_SUBSYS_HF);
 	__ASSERT_NO_MSG(data->clk_mgr);
 
-	k_sem_init(&data->device_sync_sem, 0, UINT_MAX);
+	k_sem_init(&data->device_sync_sem, 0, K_SEM_MAX_LIMIT);
 	k_mutex_init(&data->mutex);
 
 	IRQ_CONNECT(
@@ -137,13 +134,11 @@ static int temp_nrf5_init(const struct device *dev)
 	return 0;
 }
 
-static struct temp_nrf5_data temp_nrf5_driver;
+#define NRF_TEMP_DEFINE(inst)								\
+	static struct temp_nrf5_data temp_nrf5_data_##inst;				\
+											\
+	DEVICE_DT_INST_DEFINE(inst, temp_nrf5_init, NULL,				\
+			      &temp_nrf5_data_##inst, NULL, POST_KERNEL,		\
+			      CONFIG_SENSOR_INIT_PRIORITY, &temp_nrf5_driver_api);	\
 
-DEVICE_DT_INST_DEFINE(0,
-		    temp_nrf5_init,
-		    device_pm_control_nop,
-		    &temp_nrf5_driver,
-		    NULL,
-		    POST_KERNEL,
-		    CONFIG_SENSOR_INIT_PRIORITY,
-		    &temp_nrf5_driver_api);
+DT_INST_FOREACH_STATUS_OKAY(NRF_TEMP_DEFINE)
