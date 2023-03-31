@@ -33,6 +33,7 @@
 #define ZEPHYR_INCLUDE_RTIO_RTIO_H_
 
 #include <zephyr/rtio/rtio_spsc.h>
+#include <zephyr/rtio/rtio_mpsc.h>
 #include <zephyr/sys/__assert.h>
 #include <zephyr/sys/atomic.h>
 #include <zephyr/device.h>
@@ -96,8 +97,24 @@ struct rtio_iodev;
 
 /**
  * @brief The next request in the queue should wait on this one.
+ *
+ * Chained SQEs are individual units of work describing patterns of
+ * ordering and failure cascading. A chained SQE must be started only
+ * after the one before it. They are given to the iodevs one after another.
  */
 #define RTIO_SQE_CHAINED BIT(0)
+
+/**
+ * @brief The next request in the queue is part of a transaction.
+ *
+ * Transactional SQEs are sequential parts of a unit of work.
+ * Only the first transactional SQE is submitted to an iodev, the
+ * remaining SQEs are never individually submitted but instead considered
+ * to be part of the transaction to the single iodev. The first sqe in the
+ * sequence holds the iodev that will be used and the last holds the userdata
+ * that will be returned in a single completion on failure/success.
+ */
+#define RTIO_SQE_TRANSACTION BIT(1)
 
 /**
  * @}
@@ -113,7 +130,7 @@ struct rtio_sqe {
 
 	uint16_t flags; /**< Op Flags */
 
-	struct rtio_iodev *iodev; /**< Device to operation on */
+	const struct rtio_iodev *iodev; /**< Device to operation on */
 
 	/**
 	 * User provided pointer to data which is returned upon operation
@@ -164,6 +181,7 @@ struct rtio_cq {
 };
 
 struct rtio;
+struct rtio_iodev_sqe;
 
 struct rtio_executor_api {
 	/**
@@ -179,12 +197,12 @@ struct rtio_executor_api {
 	/**
 	 * @brief SQE completes successfully
 	 */
-	void (*ok)(struct rtio *r, const struct rtio_sqe *sqe, int result);
+	void (*ok)(struct rtio_iodev_sqe *iodev_sqe, int result);
 
 	/**
-	 * @brief SQE fails to complete
+	 * @brief SQE fails to complete successfully
 	 */
-	void (*err)(struct rtio *r, const struct rtio_sqe *sqe, int result);
+	void (*err)(struct rtio_iodev_sqe *iodev_sqe, int result);
 };
 
 /**
@@ -257,64 +275,47 @@ struct rtio {
 	struct rtio_cq *cq;
 };
 
+
 /**
- * @brief API that an RTIO IO device should implement
+ * @brief IO device submission queue entry
  */
-struct rtio_iodev_api {
-	/**
-	 * @brief Submission function for a request to the iodev
-	 *
-	 * The iodev is responsible for doing the operation described
-	 * as a submission queue entry and reporting results using using
-	 * `rtio_sqe_ok` or `rtio_sqe_err` once done.
-	 */
-	void (*submit)(const struct rtio_sqe *sqe,
-		       struct rtio *r);
-
-	/**
-	 * TODO some form of transactional piece is missing here
-	 * where we wish to "transact" on an iodev with multiple requests
-	 * over a chain.
-	 *
-	 * Only once explicitly released or the chain fails do we want
-	 * to release. Once released any pending iodevs in the queue
-	 * should be done.
-	 *
-	 * Something akin to a lock/unlock pair.
-	 */
-};
-
-/* IO device submission queue entry */
 struct rtio_iodev_sqe {
+	struct rtio_mpsc_node q;
 	const struct rtio_sqe *sqe;
 	struct rtio *r;
 };
 
 /**
- * @brief IO device submission queue
- *
- * This is used for reifying the member of the rtio_iodev struct
+ * @brief API that an RTIO IO device should implement
  */
-struct rtio_iodev_sq {
-	struct rtio_spsc _spsc;
-	struct rtio_iodev_sqe buffer[];
+struct rtio_iodev_api {
+	/**
+	 * @brief Submit to the iodev an entry to work on
+	 *
+	 * This call should be short in duration and most likely
+	 * either enqueue or kick off an entry with the hardware.
+	 *
+	 * If polling is required the iodev should add itself to the execution
+	 * context (@see rtio_add_pollable())
+	 *
+	 * @param iodev_sqe Submission queue entry
+	 */
+	void (*submit)(struct rtio_iodev_sqe *iodev_sqe);
 };
 
 /**
  * @brief An IO device with a function table for submitting requests
- *
- * This is required to be the first member of every iodev. There's a strong
- * possibility this will be extended with some common data fields (statistics)
- * in the future.
  */
 struct rtio_iodev {
 	/* Function pointer table */
 	const struct rtio_iodev_api *api;
 
 	/* Queue of RTIO contexts with requests */
-	struct rtio_iodev_sq *iodev_sq;
-};
+	struct rtio_mpsc iodev_sq;
 
+	/* Data associated with this iodev */
+	void *data;
+};
 
 /** An operation that does nothing and will complete immediately */
 #define RTIO_OP_NOP 0
@@ -329,10 +330,11 @@ struct rtio_iodev {
  * @brief Prepare a nop (no op) submission
  */
 static inline void rtio_sqe_prep_nop(struct rtio_sqe *sqe,
-				struct rtio_iodev *iodev,
+				const struct rtio_iodev *iodev,
 				void *userdata)
 {
 	sqe->op = RTIO_OP_NOP;
+	sqe->flags = 0;
 	sqe->iodev = iodev;
 	sqe->userdata = userdata;
 }
@@ -341,7 +343,7 @@ static inline void rtio_sqe_prep_nop(struct rtio_sqe *sqe,
  * @brief Prepare a read op submission
  */
 static inline void rtio_sqe_prep_read(struct rtio_sqe *sqe,
-				      struct rtio_iodev *iodev,
+				      const struct rtio_iodev *iodev,
 				      int8_t prio,
 				      uint8_t *buf,
 				      uint32_t len,
@@ -349,6 +351,7 @@ static inline void rtio_sqe_prep_read(struct rtio_sqe *sqe,
 {
 	sqe->op = RTIO_OP_RX;
 	sqe->prio = prio;
+	sqe->flags = 0;
 	sqe->iodev = iodev;
 	sqe->buf_len = len;
 	sqe->buf = buf;
@@ -359,7 +362,7 @@ static inline void rtio_sqe_prep_read(struct rtio_sqe *sqe,
  * @brief Prepare a write op submission
  */
 static inline void rtio_sqe_prep_write(struct rtio_sqe *sqe,
-				       struct rtio_iodev *iodev,
+				       const struct rtio_iodev *iodev,
 				       int8_t prio,
 				       uint8_t *buf,
 				       uint32_t len,
@@ -367,6 +370,7 @@ static inline void rtio_sqe_prep_write(struct rtio_sqe *sqe,
 {
 	sqe->op = RTIO_OP_TX;
 	sqe->prio = prio;
+	sqe->flags = 0;
 	sqe->iodev = iodev;
 	sqe->buf_len = len;
 	sqe->buf = buf;
@@ -380,7 +384,7 @@ static inline void rtio_sqe_prep_write(struct rtio_sqe *sqe,
  * @param len Queue length, power of 2 required (2, 4, 8).
  */
 #define RTIO_SQ_DEFINE(name, len)			\
-	static RTIO_SPSC_DEFINE(name, struct rtio_sqe, len)
+	RTIO_SPSC_DEFINE(name, struct rtio_sqe, len)
 
 /**
  * @brief Statically define and initialize a fixed length completion queue.
@@ -389,17 +393,21 @@ static inline void rtio_sqe_prep_write(struct rtio_sqe *sqe,
  * @param len Queue length, power of 2 required (2, 4, 8).
  */
 #define RTIO_CQ_DEFINE(name, len)			\
-	static RTIO_SPSC_DEFINE(name, struct rtio_cqe, len)
-
+	RTIO_SPSC_DEFINE(name, struct rtio_cqe, len)
 
 /**
- * @brief Statically define and initialize a fixed length iodev submission queue
+ * @brief Statically define and initialize an RTIO IODev
  *
- * @param name Name of the queue.
- * @param len Queue length, power of 2 required
+ * @param name Name of the iodev
+ * @param iodev_api Pointer to struct rtio_iodev_api
+ * @param iodev_data Data pointer
  */
-#define RTIO_IODEV_SQ_DEFINE(name, len) \
-	static RTIO_SPSC_DEFINE(name, struct rtio_iodev_sqe, len)
+#define RTIO_IODEV_DEFINE(name, iodev_api, iodev_data)                                             \
+	STRUCT_SECTION_ITERABLE(rtio_iodev, name) = {                                              \
+		.api = (iodev_api),                                                                \
+		.iodev_sq = RTIO_MPSC_INIT((name.iodev_sq)),                                       \
+		.data = (iodev_data),                                                              \
+	}
 
 /**
  * @brief Statically define and initialize an RTIO context
@@ -409,20 +417,22 @@ static inline void rtio_sqe_prep_write(struct rtio_sqe *sqe,
  * @param sq_sz Size of the submission queue, must be power of 2
  * @param cq_sz Size of the completion queue, must be power of 2
  */
-#define RTIO_DEFINE(name, exec, sq_sz, cq_sz)							   \
-	IF_ENABLED(CONFIG_RTIO_SUBMIT_SEM, (K_SEM_DEFINE(_submit_sem_##name, 0, K_SEM_MAX_LIMIT))) \
-	IF_ENABLED(CONFIG_RTIO_CONSUME_SEM, (K_SEM_DEFINE(_consume_sem_##name, 0, 1)))		   \
-	RTIO_SQ_DEFINE(_sq_##name, sq_sz);							   \
-	RTIO_CQ_DEFINE(_cq_##name, cq_sz);							   \
-	static struct rtio name = {								   \
-		.executor = (exec),								   \
-		.xcqcnt = ATOMIC_INIT(0),							   \
+#define RTIO_DEFINE(name, exec, sq_sz, cq_sz)	\
+	IF_ENABLED(CONFIG_RTIO_SUBMIT_SEM,							   \
+		   (static K_SEM_DEFINE(_submit_sem_##name, 0, K_SEM_MAX_LIMIT)))		   \
+	IF_ENABLED(CONFIG_RTIO_CONSUME_SEM,							   \
+		   (static K_SEM_DEFINE(_consume_sem_##name, 0, K_SEM_MAX_LIMIT)))		   \
+	static RTIO_SQ_DEFINE(_sq_##name, sq_sz);						   \
+	static RTIO_CQ_DEFINE(_cq_##name, cq_sz);						   \
+	STRUCT_SECTION_ITERABLE(rtio, name) = {							   \
+		.executor = (exec),                                                                \
+		.xcqcnt = ATOMIC_INIT(0),                                                          \
 		IF_ENABLED(CONFIG_RTIO_SUBMIT_SEM, (.submit_sem = &_submit_sem_##name,))	   \
 		IF_ENABLED(CONFIG_RTIO_SUBMIT_SEM, (.submit_count = 0,))			   \
 		IF_ENABLED(CONFIG_RTIO_CONSUME_SEM, (.consume_sem = &_consume_sem_##name,))	   \
 		.sq = (struct rtio_sq *const)&_sq_##name,					   \
-		.cq = (struct rtio_cq *const)&_cq_##name,					   \
-	}
+		.cq = (struct rtio_cq *const)&_cq_##name,                                          \
+	};
 
 /**
  * @brief Set the executor of the rtio context
@@ -433,33 +443,322 @@ static inline void rtio_set_executor(struct rtio *r, struct rtio_executor *exc)
 }
 
 /**
- * @brief Perform a submitted operation with an iodev
+ * @brief Submit to an iodev a submission to work on
  *
- * @param sqe Submission to work on
+ * Should be called by the executor when it wishes to submit work
+ * to an iodev.
+ *
+ * @param iodev_sqe Submission to work on
+ */
+static inline void rtio_iodev_submit(struct rtio_iodev_sqe *iodev_sqe)
+{
+	iodev_sqe->sqe->iodev->api->submit(iodev_sqe);
+}
+
+/**
+ * @brief Count of acquirable submission queue events
+ *
+ * @param r RTIO context
+ *
+ * @return Count of acquirable submission queue events
+ */
+static inline uint32_t rtio_sqe_acquirable(struct rtio *r)
+{
+	return rtio_spsc_acquirable(r->sq);
+}
+
+/**
+ * @brief Acquire a single submission queue event if available
+ *
+ * @param r RTIO context
+ *
+ * @retval sqe A valid submission queue event acquired from the submission queue
+ * @retval NULL No subsmission queue event available
+ */
+static inline struct rtio_sqe *rtio_sqe_acquire(struct rtio *r)
+{
+	return rtio_spsc_acquire(r->sq);
+}
+
+/**
+ * @brief Produce all previously acquired sqe
+ *
  * @param r RTIO context
  */
-static inline void rtio_iodev_submit(const struct rtio_sqe *sqe, struct rtio *r)
+static inline void rtio_sqe_produce_all(struct rtio *r)
 {
-	sqe->iodev->api->submit(sqe, r);
+	rtio_spsc_produce_all(r->sq);
+}
+
+
+/**
+ * @brief Drop all previously acquired sqe
+ *
+ * @param r RTIO context
+ */
+static inline void rtio_sqe_drop_all(struct rtio *r)
+{
+	rtio_spsc_drop_all(r->sq);
+}
+
+
+/**
+ * @brief Consume a single completion queue event if available
+ *
+ * If a completion queue event is returned rtio_cq_release(r) must be called
+ * at some point to release the cqe spot for the cqe producer.
+ *
+ * @param r RTIO context
+ *
+ * @retval cqe A valid completion queue event consumed from the completion queue
+ * @retval NULL No completion queue event available
+ */
+static inline struct rtio_cqe *rtio_cqe_consume(struct rtio *r)
+{
+#ifdef CONFIG_RTIO_CONSUME_SEM
+	if (k_sem_take(r->consume_sem, K_NO_WAIT) == 0) {
+		return rtio_spsc_consume(r->cq);
+	} else {
+		return NULL;
+	}
+#else
+	return rtio_spsc_consume(r->cq);
+#endif
+}
+
+/**
+ * @brief Wait for and consume a single completion queue event
+ *
+ * If a completion queue event is returned rtio_cq_release(r) must be called
+ * at some point to release the cqe spot for the cqe producer.
+ *
+ * @param r RTIO context
+ *
+ * @retval cqe A valid completion queue event consumed from the completion queue
+ */
+static inline struct rtio_cqe *rtio_cqe_consume_block(struct rtio *r)
+{
+	struct rtio_cqe *cqe;
+
+#ifdef CONFIG_RTIO_CONSUME_SEM
+	k_sem_take(r->consume_sem, K_FOREVER);
+
+	cqe = rtio_spsc_consume(r->cq);
+#else
+	cqe = rtio_spsc_consume(r->cq);
+
+	while (cqe == NULL) {
+		cqe = rtio_spsc_consume(r->cq);
+
+	}
+#endif
+
+	return cqe;
+}
+
+/**
+ * @brief Release all consumed completion queue events
+ *
+ * @param r RTIO context
+ */
+static inline void rtio_cqe_release_all(struct rtio *r)
+{
+	rtio_spsc_release_all(r->cq);
+}
+
+
+/**
+ * @brief Inform the executor of a submission completion with success
+ *
+ * This may start the next asynchronous request if one is available.
+ *
+ * @param iodev_sqe IODev Submission that has succeeded
+ * @param result Result of the request
+ */
+static inline void rtio_iodev_sqe_ok(struct rtio_iodev_sqe *iodev_sqe, int result)
+{
+	iodev_sqe->r->executor->api->ok(iodev_sqe, result);
+}
+
+/**
+ * @brief Inform the executor of a submissions completion with error
+ *
+ * This SHALL fail the remaining submissions in the chain.
+ *
+ * @param iodev_sqe Submission that has failed
+ * @param result Result of the request
+ */
+static inline void rtio_iodev_sqe_err(struct rtio_iodev_sqe *iodev_sqe, int result)
+{
+	iodev_sqe->r->executor->api->err(iodev_sqe, result);
+}
+
+/**
+ * @brief Cancel all requests that are pending for the iodev
+ *
+ * @param iodev IODev to cancel all requests for
+ */
+static inline void rtio_iodev_cancel_all(struct rtio_iodev *iodev)
+{
+	/* Clear pending requests as -ENODATA */
+	struct rtio_mpsc_node *node = rtio_mpsc_pop(&iodev->iodev_sq);
+
+	while (node != NULL) {
+		struct rtio_iodev_sqe *iodev_sqe = CONTAINER_OF(node, struct rtio_iodev_sqe, q);
+
+		rtio_iodev_sqe_err(iodev_sqe, -ECANCELED);
+		node = rtio_mpsc_pop(&iodev->iodev_sq);
+	}
+}
+
+/**
+ * Submit a completion queue event with a given result and userdata
+ *
+ * Called by the executor to produce a completion queue event, no inherent
+ * locking is performed and this is not safe to do from multiple callers.
+ *
+ * @param r RTIO context
+ * @param result Integer result code (could be -errno)
+ * @param userdata Userdata to pass along to completion
+ */
+static inline void rtio_cqe_submit(struct rtio *r, int result, void *userdata)
+{
+	struct rtio_cqe *cqe = rtio_spsc_acquire(r->cq);
+
+	if (cqe == NULL) {
+		atomic_inc(&r->xcqcnt);
+	} else {
+		cqe->result = result;
+		cqe->userdata = userdata;
+		rtio_spsc_produce(r->cq);
+	}
+#ifdef CONFIG_RTIO_SUBMIT_SEM
+	if (r->submit_count > 0) {
+		r->submit_count--;
+		if (r->submit_count == 0) {
+			k_sem_give(r->submit_sem);
+		}
+	}
+#endif
+#ifdef CONFIG_RTIO_CONSUME_SEM
+	k_sem_give(r->consume_sem);
+#endif
+}
+
+/**
+ * Grant access to an RTIO context to a user thread
+ */
+static inline void rtio_access_grant(struct rtio *r, struct k_thread *t)
+{
+	k_object_access_grant(r, t);
+
+#ifdef CONFIG_RTIO_SUBMIT_SEM
+	k_object_access_grant(r->submit_sem, t);
+#endif
+
+#ifdef CONFIG_RTIO_CONSUME_SEM
+	k_object_access_grant(r->consume_sem, t);
+#endif
+}
+
+/**
+ * @brief Copy an array of SQEs into the queue
+ *
+ * Useful if a batch of submissions is stored in ROM or
+ * RTIO is used from user mode where a copy must be made.
+ *
+ * Partial copying is not done as chained SQEs need to be submitted
+ * as a whole set.
+ *
+ * @param r RTIO context
+ * @param sqes Pointer to an array of SQEs
+ * @param sqe_count Count of sqes in array
+ *
+ * @retval 0 success
+ * @retval -ENOMEM not enough room in the queue
+ */
+__syscall int rtio_sqe_copy_in(struct rtio *r,
+			       const struct rtio_sqe *sqes,
+			       size_t sqe_count);
+static inline int z_impl_rtio_sqe_copy_in(struct rtio *r,
+					  const struct rtio_sqe *sqes,
+					  size_t sqe_count)
+{
+	struct rtio_sqe *sqe;
+	uint32_t acquirable = rtio_sqe_acquirable(r);
+
+	if (acquirable < sqe_count) {
+		return -ENOMEM;
+	}
+
+	for (int i = 0; i < sqe_count; i++) {
+		sqe = rtio_sqe_acquire(r);
+		__ASSERT_NO_MSG(sqe != NULL);
+		*sqe = sqes[i];
+	}
+
+	rtio_sqe_produce_all(r);
+
+	return 0;
+}
+
+/**
+ * @brief Copy an array of CQEs from the queue
+ *
+ * Copies from the RTIO context and its queue completion queue
+ * events, waiting for the given time period to gather the number
+ * of completions requested.
+ *
+ * @param r RTIO context
+ * @param cqes Pointer to an array of SQEs
+ * @param cqe_count Count of sqes in array
+ * @param timeout Timeout to wait for each completion event. Total wait time is
+ *                potentially timeout*cqe_count at maximum.
+ *
+ * @retval copy_count Count of copied CQEs (0 to cqe_count)
+ */
+__syscall int rtio_cqe_copy_out(struct rtio *r,
+				struct rtio_cqe *cqes,
+				size_t cqe_count,
+				k_timeout_t timeout);
+static inline int z_impl_rtio_cqe_copy_out(struct rtio *r,
+					   struct rtio_cqe *cqes,
+					   size_t cqe_count,
+					   k_timeout_t timeout)
+{
+	size_t copied;
+	struct rtio_cqe *cqe;
+
+	for (copied = 0; copied < cqe_count; copied++) {
+		cqe = rtio_cqe_consume_block(r);
+		if (cqe == NULL) {
+			break;
+		}
+		cqes[copied] = *cqe;
+	}
+
+
+	rtio_cqe_release_all(r);
+
+	return copied;
 }
 
 /**
  * @brief Submit I/O requests to the underlying executor
  *
- * Submits the queue of requested IO operation chains to
- * the underlying executor. The underlying executor will decide
- * on which hardware and with what sort of parallelism the execution
- * of IO chains is performed.
+ * Submits the queue of submission queue events to the executor.
+ * The executor will do the work of managing tasks representing each
+ * submission chain, freeing submission queue events when done, and
+ * producing completion queue events as submissions are completed.
  *
  * @param r RTIO context
- * @param wait_count Count of completions to wait for
- * If wait_count is for completions flag is set, the call will not
- * return until the desired number of completions are done. A wait count of
- * non-zero requires the caller be on a thread.
+ * @param wait_count Number of submissions to wait for completion of.
  *
  * @retval 0 On success
  */
-static inline int rtio_submit(struct rtio *r, uint32_t wait_count)
+__syscall int rtio_submit(struct rtio *r, uint32_t wait_count);
+
+static inline int z_impl_rtio_submit(struct rtio *r, uint32_t wait_count)
 {
 	int res;
 
@@ -500,131 +799,13 @@ static inline int rtio_submit(struct rtio *r, uint32_t wait_count)
 	}
 #else
 	while (rtio_spsc_consumable(r->cq) < wait_count) {
-#ifdef CONFIG_BOARD_NATIVE_POSIX
-		k_busy_wait(1);
-#else
+		Z_SPIN_DELAY(10);
 		k_yield();
-#endif /* CONFIG_BOARD_NATIVE_POSIX */
 	}
 #endif
 
 	return res;
 }
-
-/**
- * @brief Consume a single completion queue event if available
- *
- * If a completion queue event is returned rtio_cq_release(r) must be called
- * at some point to release the cqe spot for the cqe producer.
- *
- * @param r RTIO context
- *
- * @retval cqe A valid completion queue event consumed from the completion queue
- * @retval NULL No completion queue event available
- */
-static inline struct rtio_cqe *rtio_cqe_consume(struct rtio *r)
-{
-	return rtio_spsc_consume(r->cq);
-}
-
-/**
- * @brief Wait for and consume a single completion queue event
- *
- * If a completion queue event is returned rtio_cq_release(r) must be called
- * at some point to release the cqe spot for the cqe producer.
- *
- * @param r RTIO context
- *
- * @retval cqe A valid completion queue event consumed from the completion queue
- */
-static inline struct rtio_cqe *rtio_cqe_consume_block(struct rtio *r)
-{
-	struct rtio_cqe *cqe;
-
-	/* TODO is there a better way? reset this in submit? */
-#ifdef CONFIG_RTIO_CONSUME_SEM
-	k_sem_reset(r->consume_sem);
-#endif
-	cqe = rtio_spsc_consume(r->cq);
-
-	while (cqe == NULL) {
-		cqe = rtio_spsc_consume(r->cq);
-
-#ifdef CONFIG_RTIO_CONSUME_SEM
-		k_sem_take(r->consume_sem, K_FOREVER);
-#else
-		k_yield();
-#endif
-	}
-
-	return cqe;
-}
-
-/**
- * @brief Inform the executor of a submission completion with success
- *
- * This may start the next asynchronous request if one is available.
- *
- * @param r RTIO context
- * @param sqe Submission that has succeeded
- * @param result Result of the request
- */
-static inline void rtio_sqe_ok(struct rtio *r, const struct rtio_sqe *sqe, int result)
-{
-	r->executor->api->ok(r, sqe, result);
-}
-
-/**
- * @brief Inform the executor of a submissions completion with error
- *
- * This SHALL fail the remaining submissions in the chain.
- *
- * @param r RTIO context
- * @param sqe Submission that has failed
- * @param result Result of the request
- */
-static inline void rtio_sqe_err(struct rtio *r, const struct rtio_sqe *sqe, int result)
-{
-	r->executor->api->err(r, sqe, result);
-}
-
-/**
- * Submit a completion queue event with a given result and userdata
- *
- * Called by the executor to produce a completion queue event, no inherent
- * locking is performed and this is not safe to do from multiple callers.
- *
- * @param r RTIO context
- * @param result Integer result code (could be -errno)
- * @param userdata Userdata to pass along to completion
- */
-static inline void rtio_cqe_submit(struct rtio *r, int result, void *userdata)
-{
-	struct rtio_cqe *cqe = rtio_spsc_acquire(r->cq);
-
-	if (cqe == NULL) {
-		atomic_inc(&r->xcqcnt);
-	} else {
-		cqe->result = result;
-		cqe->userdata = userdata;
-		rtio_spsc_produce(r->cq);
-	}
-#ifdef CONFIG_RTIO_SUBMIT_SEM
-	if (r->submit_count > 0) {
-		r->submit_count--;
-		if (r->submit_count == 0) {
-			k_sem_give(r->submit_sem);
-		}
-	}
-#endif
-#ifdef CONFIG_RTIO_CONSUME_SEM
-	k_sem_give(r->consume_sem);
-#endif
-}
-
-/* TODO add rtio_sqe_suspend() for suspending a submission chain that must
- * wait on other in progress submissions or submission chains.
- */
 
 /**
  * @}
@@ -633,5 +814,7 @@ static inline void rtio_cqe_submit(struct rtio *r, int result, void *userdata)
 #ifdef __cplusplus
 }
 #endif
+
+#include <syscalls/rtio.h>
 
 #endif /* ZEPHYR_INCLUDE_RTIO_RTIO_H_ */

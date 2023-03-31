@@ -6,6 +6,7 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/sys/check.h>
+#include <zephyr/arch/cpu.h>
 
 #include <soc.h>
 #include <adsp_boot.h>
@@ -39,6 +40,22 @@ static void ipc_isr(void *arg)
 	z_sched_ipi();
 #endif
 }
+
+#define DFIDCCP			0x2020
+#define CAP_INST_SHIFT		24
+#define CAP_INST_MASK		BIT_MASK(4)
+
+unsigned int soc_num_cpus;
+
+static __imr int soc_num_cpus_init(const struct device *dev)
+{
+	/* Need to set soc_num_cpus early to arch_num_cpus() works properly */
+	soc_num_cpus = ((sys_read32(DFIDCCP) >> CAP_INST_SHIFT) & CAP_INST_MASK) + 1;
+	soc_num_cpus = MIN(CONFIG_MP_MAX_NUM_CPUS, soc_num_cpus);
+
+	return 0;
+}
+SYS_INIT(soc_num_cpus_init, EARLY, 1);
 
 void soc_mp_init(void)
 {
@@ -76,13 +93,24 @@ void soc_start_core(int cpu_num)
 		}
 
 		/* Tell the ACE ROM that it should use secondary core flow */
-		DFDSPBRCP.bootctl[cpu_num].battr |= DFDSPBRCP_BATTR_LPSCTL_BATTR_SLAVE_CORE;
+		DSPCS.bootctl[cpu_num].battr |= DSPBR_BATTR_LPSCTL_BATTR_SLAVE_CORE;
 	}
 
-	DFDSPBRCP.capctl[cpu_num].ctl |= DFDSPBRCP_CTL_SPA;
+	/* Setting the Power Active bit to the off state before powering up the core. This step is
+	 * required by the HW if we are starting core for a second time. Without this sequence, the
+	 * core will not power on properly when doing transition D0->D3->D0.
+	 */
+	DSPCS.capctl[cpu_num].ctl &= ~DSPCS_CTL_SPA;
+
+	/* Checking current power status of the core. */
+	while (((DSPCS.capctl[cpu_num].ctl & DSPCS_CTL_CPA) == DSPCS_CTL_CPA)) {
+		k_busy_wait(HW_STATE_CHECK_DELAY);
+	}
+
+	DSPCS.capctl[cpu_num].ctl |= DSPCS_CTL_SPA;
 
 	/* Waiting for power up */
-	while (((DFDSPBRCP.capctl[cpu_num].ctl & DFDSPBRCP_CTL_CPA) != DFDSPBRCP_CTL_CPA) &&
+	while (((DSPCS.capctl[cpu_num].ctl & DSPCS_CTL_CPA) != DSPCS_CTL_CPA) &&
 	       (retry > 0)) {
 		k_busy_wait(HW_STATE_CHECK_DELAY);
 		retry--;
@@ -99,13 +127,8 @@ void soc_mp_startup(uint32_t cpu)
 	z_xtensa_irq_enable(ACE_INTC_IRQ);
 
 	/* Prevent idle from powering us off */
-	DFDSPBRCP.bootctl[cpu].bctl |=
-		DFDSPBRCP_BCTL_WAITIPCG | DFDSPBRCP_BCTL_WAITIPPG;
-	/* checking if WDT was stopped during D3 transition */
-	if (DFDSPBRCP.bootctl[cpu].wdtcs & DFDSPBRCP_WDT_RESUME) {
-		DFDSPBRCP.bootctl[cpu].wdtcs = DFDSPBRCP_WDT_RESUME;
-		/* TODO: delete this IF when FW starts using imr restore vector */
-	}
+	DSPCS.bootctl[cpu].bctl |=
+		DSPBR_BCTL_WAITIPCG | DSPBR_BCTL_WAITIPPG;
 }
 
 void arch_sched_ipi(void)
@@ -122,6 +145,7 @@ void arch_sched_ipi(void)
 	}
 }
 
+#if CONFIG_MP_MAX_NUM_CPUS > 1
 int soc_adsp_halt_cpu(int id)
 {
 	int retry = CORE_POWER_CHECK_NUM;
@@ -130,18 +154,18 @@ int soc_adsp_halt_cpu(int id)
 		return -EINVAL;
 	}
 
-	CHECKIF(id <= 0 || id >= CONFIG_MP_NUM_CPUS) {
+	CHECKIF(id <= 0 || id >= arch_num_cpus()) {
 		return -EINVAL;
 	}
 
-	CHECKIF(!soc_cpus_active[id]) {
+	CHECKIF(soc_cpus_active[id]) {
 		return -EINVAL;
 	}
 
-	DFDSPBRCP.capctl[id].ctl &= ~DFDSPBRCP_CTL_SPA;
+	DSPCS.capctl[id].ctl &= ~DSPCS_CTL_SPA;
 
 	/* Waiting for power off */
-	while (((DFDSPBRCP.capctl[id].ctl & DFDSPBRCP_CTL_CPA) == DFDSPBRCP_CTL_CPA) &&
+	while (((DSPCS.capctl[id].ctl & DSPCS_CTL_CPA) == DSPCS_CTL_CPA) &&
 	       (retry > 0)) {
 		k_busy_wait(HW_STATE_CHECK_DELAY);
 		retry--;
@@ -152,8 +176,7 @@ int soc_adsp_halt_cpu(int id)
 		return -EINVAL;
 	}
 
-	/* Stop sending IPIs to this core */
-	soc_cpus_active[id] = false;
-
+	ACE_PWRCTL->wpdsphpxpg &= ~BIT(id);
 	return 0;
 }
+#endif

@@ -35,8 +35,6 @@ zephyr_linker_section_configure(SECTION initshell
 zephyr_linker_section(NAME log_dynamic GROUP DATA_REGION NOINPUT)
 zephyr_linker_section_configure(SECTION log_dynamic KEEP INPUT ".log_dynamic_*")
 
-zephyr_iterable_section(NAME _static_thread_data GROUP DATA_REGION ${XIP_ALIGN_WITH_INPUT} SUBALIGN 4)
-
 if(CONFIG_USERSPACE)
   # All kernel objects within are assumed to be either completely
   # initialized at build time, or initialized automatically at runtime
@@ -95,6 +93,11 @@ if(CONFIG_USB_DEVICE_BOS)
   zephyr_linker_section_configure(SECTION usb_data
     KEEP SORT NAME INPUT ".usb.bos_desc"
   )
+endif()
+
+if(CONFIG_RTIO)
+  zephyr_iterable_section(NAME rtio GROUP DATA_REGION ${XIP_ALIGN_WITH_INPUT} SUBALIGN 4)
+  zephyr_iterable_section(NAME rtio_iodev GROUP DATA_REGION ${XIP_ALIGN_WITH_INPUT} SUBALIGN 4)
 endif()
 
 #if(CONFIG_USERSPACE)
